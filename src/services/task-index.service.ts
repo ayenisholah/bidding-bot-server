@@ -1,6 +1,4 @@
 import { ITask } from '../models/task.model';
-import { debugLog } from '../utils/debug-file-logger';
-
 /**
  * Task Index Service
  *
@@ -92,7 +90,6 @@ class TaskIndexService {
       this.slugToTasksMap.get(slugKey)!.add(task);
     }
 
-    debugLog('TaskIndex', `ADD | taskId=${taskId} | slug=${slugKey} | contract=${contractKey?.slice(0, 10)}...`);
   }
 
   /**
@@ -139,7 +136,6 @@ class TaskIndexService {
       }
     }
 
-    debugLog('TaskIndex', `REMOVE | taskId=${taskId} | slug=${slugKey} | contract=${contractKey?.slice(0, 10)}... | removedFromContract=${removedFromContract} | removedFromSlug=${removedFromSlug}`);
   }
 
   /**

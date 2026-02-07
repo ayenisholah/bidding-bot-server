@@ -1,6 +1,6 @@
 import Redis from 'ioredis';
 import { Queue } from 'bullmq';
-import { errorLog, debugLog, warnLog, infoLog } from '../utils/debug-file-logger';
+import { errorLog, warnLog} from '../utils/debug-file-logger';
 import { tradingDisabledCache } from '../utils/trading-disabled-cache';
 import { GREEN, YELLOW, RED } from '../index';
 
@@ -39,7 +39,6 @@ class HealthMonitorService {
     this.redis = redis;
     this.queue = queue;
     this.config = config;
-    infoLog('HealthMonitorService', 'Initialized with Redis and Queue');
   }
 
   /**
@@ -54,7 +53,6 @@ class HealthMonitorService {
     // Start health check monitoring
     this.monitorInterval = setInterval(() => {
       this.monitorHealth().catch(err => {
-        debugLog('Health', 'Health monitoring interval failed', err);
       });
     }, HEALTH_CHECK_INTERVAL);
 
@@ -65,7 +63,6 @@ class HealthMonitorService {
       });
     }, PASSWORD_CHECK_INTERVAL);
 
-    infoLog('HealthMonitorService', 'Health monitoring started');
   }
 
   /**
@@ -82,7 +79,6 @@ class HealthMonitorService {
       this.passwordCheckInterval = null;
     }
 
-    infoLog('HealthMonitorService', 'Health monitoring stopped');
   }
 
   /**
@@ -240,7 +236,6 @@ class HealthMonitorService {
 
     } catch (error) {
       // Log as debug level to avoid sending to Axiom
-      debugLog('Health', `Health monitoring failed: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
 

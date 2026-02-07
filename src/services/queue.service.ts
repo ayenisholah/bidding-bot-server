@@ -4,7 +4,7 @@ import {
   checkBullMQConnectionsHealth,
   closeAllBullMQConnections
 } from '../utils/redis';
-import { errorLog, warnLog, debugLog } from '../utils/debug-file-logger';
+import { errorLog, warnLog} from '../utils/debug-file-logger';
 import { orderCache } from '../utils/order-cache';
 import { cancellationTracker } from '../utils/cancellation-tracker';
 
@@ -243,7 +243,6 @@ class QueueService {
     // Create Blur worker
     await this.createBlurWorker(concurrencyPerWorker);
 
-    debugLog('STARTUP', `Workers initialized | count=${this.workers.length} | concurrency=${concurrencyPerWorker}`);
   }
 
   /**

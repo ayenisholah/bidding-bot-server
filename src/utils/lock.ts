@@ -1,5 +1,5 @@
 import { LRUCache } from 'lru-cache';
-import { errorLog, warnLog, debugLog } from './debug-file-logger';
+import { errorLog, warnLog} from './debug-file-logger';
 
 interface LockEntry {
   ownerId: string;
@@ -36,7 +36,6 @@ export class DistributedLockManager {
       updateAgeOnGet: false,
       // Dispose function to log when locks are evicted
       dispose: (value, key) => {
-        debugLog('Lock', `Lock evicted from LRU cache | key=${key}`);
       }
     });
   }
@@ -79,7 +78,6 @@ export class DistributedLockManager {
     };
 
     this.locks.set(lockKey, lockEntry);
-    debugLog('Lock', `Lock acquired | key=${lockKey} | ttl=${ttlSeconds}s | expiresAt=${new Date(expiresAt).toISOString()}`);
     return true;
   }
 
@@ -91,7 +89,6 @@ export class DistributedLockManager {
     const existed = this.locks.delete(lockKey);
 
     if (existed) {
-      debugLog('Lock', `Lock released | key=${lockKey}`);
     }
   }
 
@@ -115,7 +112,6 @@ export class DistributedLockManager {
     existingLock.expiresAt = newExpiresAt;
     this.locks.set(lockKey, existingLock);
 
-    debugLog('Lock', `Lock extended | key=${lockKey} | newTTL=${additionalTTLSeconds}s | newExpiresAt=${new Date(newExpiresAt).toISOString()}`);
     return true;
   }
 
@@ -194,7 +190,6 @@ export class DistributedLockManager {
     // Clean up expired locks
     expiredLocks.forEach(([key]) => {
       this.locks.delete(key);
-      debugLog('Lock', `Expired lock removed during stats collection | key=${key}`);
     });
 
     return {
@@ -242,7 +237,6 @@ export class DistributedLockManager {
     }
 
     if (cleaned > 0) {
-      debugLog('Lock', `Cleaned up ${cleaned} expired locks`);
     }
 
     return cleaned;

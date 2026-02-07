@@ -2,7 +2,7 @@ import WebSocket, { Server as WebSocketServer } from 'ws';
 import { LRUCache } from 'lru-cache';
 import { ITask } from '../models/task.model';
 import { BroadcastManager } from '../utils/broadcast-manager';
-import { debugLog, errorLog } from '../utils/debug-file-logger';
+import { errorLog } from '../utils/debug-file-logger';
 
 // Message deduplication with automatic TTL expiration
 // Matches configuration in index.ts for consistency
@@ -81,7 +81,6 @@ class WebSocketService {
     this.getStatsData = getStatsData;
 
     this.setupConnectionHandler();
-    debugLog('WebSocketService', 'Initialized');
   }
 
   /**
@@ -124,7 +123,6 @@ class WebSocketService {
       }
     }
     // Summary log preserved - single line shows count
-    debugLog('WebSocket', `Client connected | auto-subscribed=${successCount} | failed=${failCount} | total=${activeTaskIds.length}`);
 
     // Send the latest bid rates immediately upon connection
     if (ws.readyState === WebSocket.OPEN && this.getStatsData) {

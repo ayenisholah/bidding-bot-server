@@ -9,8 +9,6 @@
  * Uses debug-file-logger.ts to write to category-specific log files.
  */
 
-import { debugLog } from './debug-file-logger';
-
 /**
  * Configuration for cache insertion logging
  */
@@ -145,7 +143,6 @@ export function logCacheInsertion(
     };
 
     // Log to 'Cache' prefix -> routes to system-YYYY-MM-DD.log
-    debugLog('Cache', message, metadata);
   } catch (error) {
     // Silently fail - don't break cache operations
   }

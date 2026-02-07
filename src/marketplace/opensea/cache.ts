@@ -248,16 +248,6 @@ export function resetCacheStats() {
 // Log stats every 5 minutes (aggregated, not per-access)
 setInterval(() => {
   const cacheStats = getCacheStats();
-  const { infoLog } = require('../../utils/debug-file-logger');
-  infoLog('Performance',
-    `[OS-Cache 5min Summary] ` +
-    `collDetails: ${cacheStats.collectionDetails.hits} hits, ${cacheStats.collectionDetails.misses} misses (${cacheStats.collectionDetails.hitRate}, ${cacheStats.collectionDetails.size} cached) | ` +
-    `floor: ${cacheStats.floor.hits} hits, ${cacheStats.floor.misses} misses (${cacheStats.floor.hitRate}, ${cacheStats.floor.size} cached) | ` +
-    `balance: ${cacheStats.balance.hits} hits, ${cacheStats.balance.misses} misses (${cacheStats.balance.hitRate}, ${cacheStats.balance.size} cached) | ` +
-    `seaportCounter: ${cacheStats.seaportCounter.hits} hits, ${cacheStats.seaportCounter.misses} misses (${cacheStats.seaportCounter.hitRate}, ${cacheStats.seaportCounter.size} cached) | ` +
-    `traitFloor: ${cacheStats.traitFloor.hits} hits, ${cacheStats.traitFloor.misses} misses (${cacheStats.traitFloor.hitRate}, ${cacheStats.traitFloor.size} cached) | ` +
-    `uptime: ${cacheStats.uptime}`
-  );
 }, 5 * 60 * 1000);
 
 // Tracking functions

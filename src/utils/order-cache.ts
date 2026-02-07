@@ -1,6 +1,6 @@
 import { v4 as uuidv4 } from 'uuid';
 import { LRUCache } from 'lru-cache';
-import { errorLog, debugLog, warnLog, infoLog } from './debug-file-logger';
+import { errorLog, warnLog} from './debug-file-logger';
 import { queue, CANCEL_OPENSEA_BID, CANCEL_BLUR_BID, CANCEL_MAGICEDEN_BID } from '../index';
 
 export interface CachedOrder {
@@ -95,21 +95,9 @@ export function resetOrderCacheStats() {
 // Log stats every 5 minutes (aggregated, not per-access)
 setInterval(() => {
   const cacheStats = getOrderCacheStats();
-  infoLog('OrderCache',
-    `[5min Summary] ` +
-    `lru: ${cacheStats.lru.hits} hits, ${cacheStats.lru.misses} misses (${cacheStats.lru.hitRate}) | ` +
-    `size: ${cacheStats.lru.size}/${cacheStats.lru.max} | ` +
-    `uptime: ${cacheStats.uptime}`
-  );
 
   // Log replacement stats if any occurred
   if (cacheStats.replacements.total > 0) {
-    infoLog('OrderCache',
-      `[REPLACEMENT_STATS] total=${cacheStats.replacements.total} | ` +
-      `cancelled=${cacheStats.replacements.cancelled} | ` +
-      `failed=${cacheStats.replacements.failed} | ` +
-      `successRate=${cacheStats.replacements.successRate}`
-    );
   }
 }, 5 * 60 * 1000);
 
@@ -168,7 +156,6 @@ export async function queueReplacedOrderCancellation(
     );
 
     stats.replacements.cancelled++;
-    debugLog('OrderCache', `[CANCEL_QUEUED] ${oldOrder.marketplace} | orderHash=${oldOrder.orderHash} | reason=${cancelReason}`);
   } catch (error) {
     stats.replacements.failed++;
     errorLog('OrderCache', `[CANCEL_QUEUE_ERROR] Failed to queue cancellation for ${oldOrder.orderHash}`, error as Error);
@@ -197,7 +184,6 @@ class OrderCache {
    */
   public clearLruCache(): void {
     orderLRU.clear();
-    debugLog('Cache', '[OrderCache] LRU cache cleared');
   }
 
   /**
@@ -231,7 +217,6 @@ class OrderCache {
     }
 
     orderLRU.set(lruKey, existing);
-    debugLog('OrderCache', `SET | ${lruKey} | count=${existing.length} | newest=${new Date(existing[0].createdAt).toISOString()}`);
   }
 
   /**
@@ -298,7 +283,6 @@ class OrderCache {
    */
   delete(taskId: string, marketplace: string, identifier: string): boolean {
     if (isProtectedTask(taskId)) {
-      debugLog('OrderCache', `DELETE_SKIPPED (protected) | taskId=${taskId} | ${marketplace}:${identifier}`);
       return false;
     }
 
@@ -308,7 +292,6 @@ class OrderCache {
 
     if (deleted) {
       const count = existing?.length || 0;
-      debugLog('OrderCache', `DELETE | ${lruKey} | deletedCount=${count}`);
     }
 
     return deleted;
@@ -320,7 +303,6 @@ class OrderCache {
    */
   deleteOne(taskId: string, marketplace: string, identifier: string, orderHash: string): boolean {
     if (isProtectedTask(taskId)) {
-      debugLog('OrderCache', `DELETE_ONE_SKIPPED (protected) | taskId=${taskId} | orderHash=${orderHash}`);
       return false;
     }
 
@@ -343,7 +325,6 @@ class OrderCache {
       orderLRU.set(lruKey, filtered);
     }
 
-    debugLog('OrderCache', `DELETE_ONE | ${lruKey} | remainingCount=${filtered.length}`);
     return true;
   }
 
@@ -364,7 +345,6 @@ class OrderCache {
           orderLRU.set(lruKey, orders); // Update array
         }
 
-        debugLog('OrderCache', `DELETE_BY_ID | orderId=${orderId} | key=${lruKey} | remainingCount=${orders.length}`);
         return true;
       }
     }
@@ -466,10 +446,8 @@ class OrderCache {
       if (activeOrders.length !== orders.length) {
         if (activeOrders.length === 0) {
           orderLRU.delete(lruKey);  // All orders expired - delete key
-          debugLog('OrderCache', `DELETE_EXPIRED | key=${lruKey} | expired=${orders.length}`);
         } else {
           orderLRU.set(lruKey, activeOrders);  // Update with filtered array
-          debugLog('OrderCache', `CLEANUP_EXPIRED | key=${lruKey} | removed=${orders.length - activeOrders.length} | remaining=${activeOrders.length}`);
         }
       }
     }
@@ -483,7 +461,6 @@ class OrderCache {
    */
   deleteByTask(taskId: string): number {
     if (isProtectedTask(taskId)) {
-      debugLog('OrderCache', `DELETE_BY_TASK_SKIPPED (protected) | taskId=${taskId}`);
       return 0;
     }
 
@@ -501,7 +478,6 @@ class OrderCache {
     }
 
     if (deletedCount > 0) {
-      debugLog('OrderCache', `DELETE_BY_TASK | taskId=${taskId} | deleted=${deletedCount}`);
     }
 
     return deletedCount;
@@ -592,7 +568,6 @@ class OrderCache {
    */
   deleteByTaskAndMarketplace(taskId: string, marketplace: string): number {
     if (isProtectedTask(taskId)) {
-      debugLog('OrderCache', `DELETE_BY_TASK_MARKETPLACE_SKIPPED (protected) | taskId=${taskId} | marketplace=${marketplace}`);
       return 0;
     }
 
@@ -612,7 +587,6 @@ class OrderCache {
     }
 
     if (deletedCount > 0) {
-      debugLog('OrderCache', `DELETE_BY_TASK_MARKETPLACE | taskId=${taskId} | marketplace=${marketplace} | deleted=${deletedCount}`);
     }
 
     return deletedCount;

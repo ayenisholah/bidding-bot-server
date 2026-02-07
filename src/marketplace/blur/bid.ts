@@ -11,7 +11,7 @@ import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, InvalidRequestError } from "../errors";
 import { blurRateLimiter } from "../../utils/blur-rate-limiter";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
-import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
+import { errorLog, warnLog} from "../../utils/debug-file-logger";
 import { apiDedup } from "../../utils/api-dedup";
 import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/marketplace-availability";
 import { LRUCache } from 'lru-cache';
@@ -111,26 +111,22 @@ export async function cancelBlurRequest(taskId: string): Promise<number> {
 
   const controllers = activeRequests.get(taskId);
   if (!controllers || controllers.length === 0) {
-    debugLog('HttpAbort', `CANCEL_NOOP | marketplace=blur | taskId=${taskId} | reason=no_active_requests`);
     return 0;
   }
 
   const count = controllers.length;
-  debugLog('HttpAbort', `CANCEL_START | marketplace=blur | taskId=${taskId} | activeRequestCount=${count}`);
 
   let cancelledCount = 0;
   for (let i = 0; i < controllers.length; i++) {
     try {
       controllers[i].abort();
       cancelledCount++;
-      debugLog('HttpAbort', `ABORT_REQUEST | marketplace=blur | taskId=${taskId} | requestIndex=${i}`);
     } catch (err) {
       errorLog('HttpAbort', `ABORT_ERROR | marketplace=blur | taskId=${taskId} | requestIndex=${i} | error=${(err as Error).message}`, err);
     }
   }
 
   activeRequests.delete(taskId);
-  debugLog('HttpAbort', `CANCEL_COMPLETE | marketplace=blur | taskId=${taskId} | cancelledCount=${cancelledCount}`);
 
   return cancelledCount;
 }
@@ -565,7 +561,6 @@ async function formatBidOnBlur(
 ) {
   // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
   if (isTaskBlacklisted(taskId, 'blur')) {
-    debugLog('InFlightBid', `FORMAT_BLOCKED_EARLY | taskId=${taskId} | marketplace=blur | reason=blacklisted`, { taskId, marketplace: 'blur' });
     return null;
   }
 
@@ -588,7 +583,6 @@ async function formatBidOnBlur(
       const { data } = await limiter.schedule(async () => {
         // Re-check blacklist AFTER waiting in limiter queue
         if (isTaskBlacklisted(taskId, 'blur')) {
-          debugLog('InFlightBid', `FORMAT_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=blur | waitTime=${Date.now() - formatStartTime}ms`, { taskId, marketplace: 'blur' });
           throw new Error('Task stopped while waiting in limiter queue');
         }
 
@@ -701,7 +695,6 @@ async function submitBidToBlur(
 
   // Early blacklist check BEFORE creating AbortController and entering limiter queue (Fix 3: Bids after stopTask)
   if (isTaskBlacklisted(parsedTaskId, 'blur')) {
-    debugLog('InFlightBid', `SUBMIT_BLOCKED_EARLY | taskId=${parsedTaskId} | marketplace=blur | reason=blacklisted`, { taskId: parsedTaskId, marketplace: 'blur' });
     return;
   }
 
@@ -752,7 +745,6 @@ async function submitBidToBlur(
           response = await limiter.schedule(async () => {
             // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
             if (isTaskBlacklisted(parsedTaskId, 'blur')) {
-              debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${parsedTaskId} | marketplace=blur | waitTime=${Date.now() - bidStartTime}ms`, { taskId: parsedTaskId, marketplace: 'blur' });
               throw new Error('Task stopped while waiting in limiter queue');
             }
 

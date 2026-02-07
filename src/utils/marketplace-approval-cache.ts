@@ -8,8 +8,6 @@
  * amounts (numeric) via on-chain RPC calls.
  */
 import { LRUCache } from 'lru-cache';
-import { debugLog } from './debug-file-logger';
-
 export interface MarketplaceApprovalEntry {
   address: string;
   currency: string;
@@ -76,15 +74,11 @@ class MarketplaceApprovalCache {
         ? entry.openseaApproval
         : entry.magicedenApproval;
 
-      debugLog('MarketplaceApprovalCache',
-        `CACHE_HIT | ${key} | ${marketplace}=${hasApproval}`
-      );
 
       return hasApproval;
     }
 
     this.stats.misses++;
-    debugLog('MarketplaceApprovalCache', `CACHE_MISS | ${key}`);
     return false;
   }
 
@@ -123,10 +117,6 @@ class MarketplaceApprovalCache {
     this.marketplaceApprovalLRU.set(key, entry);
     this.stats.sets++;
 
-    debugLog('MarketplaceApprovalCache',
-      `CACHE_SET | ${key} | ${marketplace}=true | ` +
-      `opensea=${entry.openseaApproval} | magiceden=${entry.magicedenApproval}`
-    );
   }
 
   /**
@@ -142,7 +132,6 @@ class MarketplaceApprovalCache {
   async clear(address: string, currency: string): Promise<void> {
     const key = this.getCacheKey(address, currency);
     this.marketplaceApprovalLRU.delete(key);
-    debugLog('MarketplaceApprovalCache', `CACHE_CLEAR | ${key}`);
   }
 
   /**
@@ -170,11 +159,6 @@ class MarketplaceApprovalCache {
   private logStats(): void {
     if (this.stats.totalRequests > 0) {
       const stats = this.getStats();
-      debugLog('MarketplaceApprovalCache',
-        `[5min Stats] hits=${stats.hits} | misses=${stats.misses} | ` +
-        `hitRate=${stats.hitRate} | sets=${stats.sets} | ` +
-        `size=${stats.size}/${stats.maxSize}`
-      );
     }
   }
 

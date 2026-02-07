@@ -1,4 +1,4 @@
-import { warnLog, errorLog, debugLog, startTimer } from "./debug-file-logger";
+import { warnLog, errorLog} from "./debug-file-logger";
 import {
   balanceLRU,
   trackBalanceHit,
@@ -24,10 +24,6 @@ const balanceFetchInFlight = new Map<string, Promise<number>>();
  * @returns WETH balance in ETH (e.g., 0.5 for 0.5 WETH)
  */
 async function fetchWethBalanceAlchemy(walletAddress: string): Promise<number> {
-  const timer = startTimer('fetchWethBalanceAlchemy', {
-    walletAddress: walletAddress.slice(0, 10) + '...'
-  });
-
   const RPC_TIMEOUT = 10000; // 10 seconds
   const MAX_RETRIES = 3;
   const RETRY_DELAYS = [1000, 2000, 4000]; // Exponential backoff
@@ -47,21 +43,13 @@ async function fetchWethBalanceAlchemy(walletAddress: string): Promise<number> {
       );
 
       // Fetch balance with timeout race
-      const apiTimer = startTimer('fetchWethBalanceAlchemy_RPC', {
-        walletAddress: walletAddress.slice(0, 10) + '...',
-        attempt
-      });
-
       const balancePromise = wethContract.balanceOf(walletAddress);
       const balanceRaw = await Promise.race([balancePromise, timeoutPromise]);
-
-      apiTimer.endAPI('eth_call:balanceOf', { statusCode: 200 });
 
       // Convert from wei to ETH (BigInt division)
       const balanceWei = BigInt(balanceRaw.toString());
       const balance = Number(balanceWei) / 1e18;
 
-      timer.end({ balance, attempt });
       return balance;
 
     } catch (error: any) {
@@ -75,7 +63,6 @@ async function fetchWethBalanceAlchemy(walletAddress: string): Promise<number> {
       // Retry with exponential backoff
       if (attempt < MAX_RETRIES) {
         const delay = RETRY_DELAYS[attempt - 1];
-        debugLog('Balance', `Retrying in ${delay}ms...`);
         await new Promise(resolve => setTimeout(resolve, delay));
         continue;
       }
@@ -83,7 +70,6 @@ async function fetchWethBalanceAlchemy(walletAddress: string): Promise<number> {
       // Final attempt: try fallback provider (PublicNode)
       if (attempt === MAX_RETRIES) {
         try {
-          debugLog('Balance', `Trying fallback provider (PublicNode) | wallet=${walletAddress.slice(0, 10)}...`);
 
           const fallbackContract = new Contract(
             WETH_ADDRESS,
@@ -95,7 +81,6 @@ async function fetchWethBalanceAlchemy(walletAddress: string): Promise<number> {
           const balanceWei = BigInt(fallbackBalance.toString());
           const balance = Number(balanceWei) / 1e18;
 
-          timer.end({ balance, attempt, fallback: true });
           return balance;
 
         } catch (fallbackError) {
@@ -123,32 +108,23 @@ export async function invalidateBalanceCache(walletAddress: string, tokenAddress
 
   try {
     balanceLRU.delete(normalizedAddress);
-    debugLog('Balance', `Invalidated LRU cache | wallet=${walletAddress.slice(0, 10)}... | token=${tokenAddress.slice(0, 10)}...`);
   } catch (error) {
     errorLog('Balance', `Failed to invalidate cache | wallet=${walletAddress.slice(0, 10)}...`, error);
   }
 }
 
 export async function fetchERC20Balance(walletAddress: string, _tokenAddress: string): Promise<number> {
-  const timer = startTimer('fetchERC20Balance', {
-    walletAddress: walletAddress.slice(0, 10) + '...',
-    currency: _tokenAddress
-  });
-
   const normalizedAddress = walletAddress.toLowerCase();
 
   // Check LRU cache (< 1ms)
   const lruCached = balanceLRU.get(normalizedAddress);
   if (lruCached !== undefined) {
     trackBalanceHit();
-    debugLog('Performance', `[Alchemy-Balance] LRU_HIT (<1ms) | wallet=${walletAddress.slice(0,10)}... | balance=${lruCached}`);
-    timer.end({ balance: lruCached, cached: true });
     return lruCached;
   }
 
   // Cache miss - fetch from Alchemy RPC
   trackBalanceMiss();
-  debugLog('Performance', `[Alchemy-Balance] CACHE_MISS | wallet=${walletAddress.slice(0,10)}... | fetching...`);
   const fetchStart = Date.now();
 
   // Use in-flight Map to prevent duplicate concurrent fetches
@@ -180,11 +156,7 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
             const existingCached = balanceLRU.get(normalizedAddress);
             if (existingCached === undefined) {
               balanceLRU.set(normalizedAddress, balance);
-              debugLog('Balance', `[DEFENSIVE CACHE] No previous cache, storing balance=0`);
             } else {
-              debugLog('Balance',
-                `[DEFENSIVE CACHE] Preserving previous balance=${existingCached} instead of 0`
-              );
               return existingCached; // Return old value, don't evict
             }
           } else {
@@ -193,10 +165,6 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
           }
 
           const fetchTime = Date.now() - fetchStart;
-          debugLog('Performance',
-            `[Alchemy-Balance] RPC_FETCH | wallet=${walletAddress.slice(0,10)}... | ` +
-            `balance=${balance} | fetchTime=${fetchTime}ms`
-          );
 
           return balance;
 
@@ -230,7 +198,6 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
   try {
     // Wait for fetch to complete (either new or in-progress)
     const result = await inFlightPromise;
-    timer.end({ balance: result || 0, cached: false });
     return result || 0;
   } catch (error) {
     // If we get a network error and no cache, return 0
@@ -238,7 +205,6 @@ export async function fetchERC20Balance(walletAddress: string, _tokenAddress: st
       `Failed to fetch WETH balance (no cached fallback) | wallet=${walletAddress.slice(0, 10)}...`,
       error
     );
-    timer.end({ balance: 0, cached: false, error: error instanceof Error ? error.message : String(error) });
     return 0;
   }
 }

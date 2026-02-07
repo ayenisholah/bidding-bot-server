@@ -13,7 +13,6 @@
 
 import { LRUCache } from 'lru-cache';
 import { getCachedFloorPrice, getCachedCollectionDetails, MARKETPLACES } from '../utils/collection-cache';
-import { debugLog } from '../utils/debug-file-logger';
 import { scheduleWithPriority } from '../init';
 
 /**
@@ -61,9 +60,6 @@ class CollectionDataWarmerService {
   warmAllTaskCollections(tasks: Array<{ _id: string; contract: { slug: string } }>): void {
     const uniqueSlugs = this.extractUniqueCollections(tasks);
 
-    debugLog('CollectionDataWarmer',
-      `[INIT] Warming all task collections | totalTasks=${tasks.length} | uniqueCollections=${uniqueSlugs.size}`
-    );
 
     // Add all unique slugs to warming set
     for (const slug of uniqueSlugs) {
@@ -90,9 +86,6 @@ class CollectionDataWarmerService {
         .catch(() => { /* Best-effort warming */ });
     }
 
-    debugLog('CollectionDataWarmer',
-      `[INIT] Started warming | collections=${uniqueSlugs.size}`
-    );
   }
 
   /**
@@ -154,9 +147,7 @@ class CollectionDataWarmerService {
       if (taskSet.size === 0) {
         this.warmingSlugs.delete(key);
         this.collectionTaskCounts.delete(key);
-        debugLog('CollectionDataWarmer', `[STOP] Last task stopped | slug=${slug} | taskId=${taskId}`);
       } else {
-        debugLog('CollectionDataWarmer', `[REF--] Task stopped, collection still in use | slug=${slug} | taskId=${taskId} | remainingTasks=${taskSet.size}`);
       }
     }
   }
@@ -174,7 +165,6 @@ class CollectionDataWarmerService {
         // Ignore errors - warmer is best-effort
       });
 
-      debugLog('CollectionDataWarmer', `[ACTIVITY] Refreshed | slug=${slug}`);
     }
   }
 
@@ -205,7 +195,6 @@ class CollectionDataWarmerService {
       this.performBackgroundWarmingPass();
     }, this.WARMING_INTERVAL);
 
-    debugLog('CollectionDataWarmer', '[BG-START] Background warming started (4min interval)');
   }
 
   /**
@@ -222,7 +211,6 @@ class CollectionDataWarmerService {
       offers: { success: 0, error: 0 }
     };
 
-    debugLog('CollectionDataWarmer', `[BG-PASS] Starting warming pass | collections=${slugs.length}`);
 
     for (const slug of slugs) {
       try {
@@ -267,10 +255,6 @@ class CollectionDataWarmerService {
     }
 
     const elapsed = Date.now() - startTime;
-    debugLog('CollectionDataWarmer',
-      `[BG-PASS] Completed | floors=${stats.floors.success}/${stats.floors.success + stats.floors.error} | ` +
-      `offers=${stats.offers.success}/${stats.offers.success + stats.offers.error} | elapsedMs=${elapsed}`
-    );
   }
 
   /**
@@ -280,7 +264,6 @@ class CollectionDataWarmerService {
     if (this.backgroundWarmingInterval) {
       clearInterval(this.backgroundWarmingInterval);
       this.backgroundWarmingInterval = null;
-      debugLog('CollectionDataWarmer', '[BG-STOP] Background warming stopped');
     }
   }
 
@@ -291,7 +274,6 @@ class CollectionDataWarmerService {
     this.stopBackgroundWarming();
     this.warmingSlugs.clear();
     this.collectionTaskCounts.clear();
-    debugLog('CollectionDataWarmer', '[SHUTDOWN] Cleared all warming tasks');
   }
 
   /**

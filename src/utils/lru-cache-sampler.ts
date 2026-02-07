@@ -10,8 +10,6 @@
  *   - Logs written to debug-logs/system-YYYY-MM-DD.log
  */
 
-import { debugLog, infoLog } from './debug-file-logger';
-
 // Import all LRU caches via getter functions
 import { processedOwnBids } from '../state/global-state';
 import { getProcessedMessages as getWsServiceProcessedMessages } from '../services/websocket.service';
@@ -599,36 +597,27 @@ export function sampleCache(cacheName: string): void {
   const config = CACHE_CONFIGS.find(c => c.name === cacheName);
 
   if (!config) {
-    infoLog('CacheSampler', `Cache not found: ${cacheName}. Available: ${CACHE_CONFIGS.map(c => c.name).join(', ')}`);
     return;
   }
 
   const size = getCacheSize(config.cache);
   const samples = extractSamples(config.cache, config.sampleSize);
 
-  infoLog('CacheSampler', `=== ${config.name} ===`);
-  infoLog('CacheSampler', `Category: ${config.category} | MaxSize: ${config.maxSize.toLocaleString()} | TTL: ${config.ttl} | CurrentSize: ${size.toLocaleString()}`);
 
   if (samples.length === 0) {
-    debugLog('CacheSampler', `${config.name}: EMPTY (no entries to sample)`);
     return;
   }
 
   samples.forEach((sample, index) => {
     const formatted = config.formatValue(sample.key, sample.value);
-    debugLog('CacheSampler', `${config.name}[${index + 1}/${samples.length}]: ${formatted}`);
   });
 
-  infoLog('CacheSampler', `${config.name}: Sampled ${samples.length}/${size} entries\n`);
 }
 
 /**
  * Sample data from all caches
  */
 export function sampleAllCaches(): void {
-  infoLog('CacheSampler', '╔════════════════════════════════════════════════════════════════════╗');
-  infoLog('CacheSampler', '║          LRU CACHE DATA SAMPLER - ALL CACHES SNAPSHOT              ║');
-  infoLog('CacheSampler', '╚════════════════════════════════════════════════════════════════════╝\n');
 
   // Group by category
   const categories = ['dedup', 'marketplace', 'security', 'monitoring', 'error', 'trait', 'other'] as const;
@@ -637,9 +626,6 @@ export function sampleAllCaches(): void {
     const categoryConfigs = CACHE_CONFIGS.filter(c => c.category === category);
     if (categoryConfigs.length === 0) return;
 
-    infoLog('CacheSampler', `\n┌─────────────────────────────────────────────────────────────────┐`);
-    infoLog('CacheSampler', `│ CATEGORY: ${category.toUpperCase().padEnd(55)} │`);
-    infoLog('CacheSampler', `└─────────────────────────────────────────────────────────────────┘`);
 
     categoryConfigs.forEach(config => {
       sampleCache(config.name);
@@ -651,22 +637,13 @@ export function sampleAllCaches(): void {
   const totalMaxCapacity = CACHE_CONFIGS.reduce((sum, c) => sum + c.maxSize, 0);
   const totalCurrentSize = CACHE_CONFIGS.reduce((sum, c) => sum + getCacheSize(c.cache), 0);
 
-  infoLog('CacheSampler', '\n╔════════════════════════════════════════════════════════════════════╗');
-  infoLog('CacheSampler', '║                        SUMMARY STATISTICS                           ║');
-  infoLog('CacheSampler', '╚════════════════════════════════════════════════════════════════════╝');
-  infoLog('CacheSampler', `Total Caches: ${totalCaches}`);
-  infoLog('CacheSampler', `Total Max Capacity: ${totalMaxCapacity.toLocaleString()} entries`);
-  infoLog('CacheSampler', `Total Current Size: ${totalCurrentSize.toLocaleString()} entries (${((totalCurrentSize / totalMaxCapacity) * 100).toFixed(2)}% full)`);
-  infoLog('CacheSampler', `By Category:`);
 
   categories.forEach(category => {
     const categoryConfigs = CACHE_CONFIGS.filter(c => c.category === category);
     const categoryMax = categoryConfigs.reduce((sum, c) => sum + c.maxSize, 0);
     const categoryCurrent = categoryConfigs.reduce((sum, c) => sum + getCacheSize(c.cache), 0);
-    infoLog('CacheSampler', `  - ${category}: ${categoryConfigs.length} caches | ${categoryCurrent.toLocaleString()}/${categoryMax.toLocaleString()} entries`);
   });
 
-  infoLog('CacheSampler', '\n✓ Cache sampling complete. Check debug-logs/system-YYYY-MM-DD.log for details.');
 }
 
 /**
@@ -676,13 +653,9 @@ export function sampleCachesByCategory(category: 'dedup' | 'marketplace' | 'secu
   const categoryConfigs = CACHE_CONFIGS.filter(c => c.category === category);
 
   if (categoryConfigs.length === 0) {
-    infoLog('CacheSampler', `No caches found in category: ${category}`);
     return;
   }
 
-  infoLog('CacheSampler', `\n┌─────────────────────────────────────────────────────────────────┐`);
-  infoLog('CacheSampler', `│ CATEGORY: ${category.toUpperCase().padEnd(55)} │`);
-  infoLog('CacheSampler', `└─────────────────────────────────────────────────────────────────┘`);
 
   categoryConfigs.forEach(config => {
     sampleCache(config.name);

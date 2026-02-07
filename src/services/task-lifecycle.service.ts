@@ -1,5 +1,5 @@
 import { ITask } from '../models/task.model';
-import { infoLog, warnLog } from '../utils/debug-file-logger';
+import { warnLog } from '../utils/debug-file-logger';
 
 /**
  * Task Lifecycle Service
@@ -40,7 +40,6 @@ class TaskLifecycleService {
     this.failedTaskStartQueue = deps.failedTaskStartQueue;
     this.failedTaskStopQueue = deps.failedTaskStopQueue;
 
-    infoLog('TaskLifecycleService', 'Initialized (batch operations only)');
   }
 
   // =============================================================================
@@ -67,7 +66,6 @@ class TaskLifecycleService {
       return;
     }
 
-    infoLog('BulkStart', `ENTRY | taskCount=${tasks.length} | batchSize=${PARALLEL_BATCH_SIZE} | batchDelayMs=${intervalMs} | staggerMs=${STAGGER_WITHIN_BATCH_MS}`);
 
     // Split tasks into batches
     const batches: ITask[][] = [];
@@ -117,7 +115,6 @@ class TaskLifecycleService {
     }
 
     const dispatchDuration = Date.now() - dispatchStartTime;
-    infoLog('BulkStart', `ALL_DISPATCHED | total=${tasks.length} | batches=${batches.length} | dispatchDurationMs=${dispatchDuration} | note=Tasks completing asynchronously`);
   }
 
   /**
@@ -187,7 +184,6 @@ class TaskLifecycleService {
     }
 
     const duration = Date.now() - dispatchStartTime;
-    infoLog('StopTaskFlow', `STOP_BATCHES_DISPATCHED | taskCount=${tasks.length} | batchCount=${batches.length} | durationMs=${duration}`);
   }
 
   // =============================================================================

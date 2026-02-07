@@ -4,7 +4,7 @@
  */
 
 import { Queue } from "bullmq";
-import { debugLog, warnLog, errorLog } from "../utils/debug-file-logger";
+import { warnLog, errorLog } from "../utils/debug-file-logger";
 import { LRUCache } from 'lru-cache';
 
 // ============================================
@@ -251,7 +251,6 @@ export async function addBulkWithRetry(
     try {
       await targetQueue.addBulk(jobs);
       if (attempt > 1) {
-        debugLog('Queue', `${queueName} addBulk succeeded on attempt ${attempt} for task ${taskId}`);
       }
       return;
     } catch (err) {

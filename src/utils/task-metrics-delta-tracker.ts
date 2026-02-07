@@ -1,6 +1,4 @@
 import { TaskBidData } from './task-metrics-types';
-import { debugLog } from './debug-file-logger';
-
 /**
  * BidRatesChangeTracker - Tracks changes to task bid data for delta updates
  *
@@ -249,7 +247,6 @@ class BidRatesChangeTracker {
   removeTask(taskId: string): void {
     this.dirtyTasks.delete(taskId);
     this.lastTaskStates.delete(taskId);
-    debugLog('ChangeTracker', `Removed task state | taskId=${taskId}`);
   }
 
   /**
@@ -260,7 +257,6 @@ class BidRatesChangeTracker {
     this.lastTaskStates.clear();
     this.lastBidRates = {};
     this.lastRps = {};
-    debugLog('ChangeTracker', 'Cleared all change tracker state');
   }
 
   /**

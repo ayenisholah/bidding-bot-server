@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { debugLog, warnLog, errorLog } from '../utils/debug-file-logger';
+import { warnLog, errorLog } from '../utils/debug-file-logger';
 
 /**
  * Connectivity Monitor Service
@@ -52,7 +52,6 @@ class ConnectivityMonitorService {
    */
   public initialize(deps: ConnectivityMonitorDependencies): void {
     this.deps = deps;
-    debugLog('ConnectivityMonitorService', 'Initialized');
   }
 
   /**
@@ -61,7 +60,6 @@ class ConnectivityMonitorService {
    */
   public async checkInternetConnectivity(): Promise<boolean> {
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      debugLog('Health', `[ConnectivityCheck] Attempt ${attempt}/${MAX_RETRIES}`);
 
       // Try each endpoint - success if ANY endpoint responds
       for (const endpoint of CONNECTIVITY_ENDPOINTS) {
@@ -69,13 +67,11 @@ class ConnectivityMonitorService {
           const response = await axios.get(endpoint.url, { timeout: 5000 });
 
           if (response.status === endpoint.expectedStatus || response.status === 204) {
-            debugLog('Health', `[ConnectivityCheck] Endpoint ${endpoint.name}: ${response.status} | SUCCESS`);
             return true; // Internet is available
           }
         } catch (error: any) {
           // Endpoint failed, try next one
           const errorMsg = error?.message || String(error);
-          debugLog('Health', `[ConnectivityCheck] Endpoint ${endpoint.name}: FAILED | ${errorMsg}`);
         }
       }
 
@@ -108,7 +104,6 @@ class ConnectivityMonitorService {
     const downtimeMinutes = Math.floor(downtime / 60000);
 
     if (downtime > 0) {
-      debugLog('ConnectivityMonitor', `Connectivity restored after ${downtimeMinutes} minutes`);
     }
 
     // No need to resume queues - BullMQ handles retries automatically
@@ -159,7 +154,6 @@ class ConnectivityMonitorService {
       }
     }, STANDARD_INTERVAL);
 
-    debugLog('ConnectivityMonitor', 'Monitoring started');
   }
 
   /**
@@ -169,7 +163,6 @@ class ConnectivityMonitorService {
     if (this.connectivityCheckInterval) {
       clearInterval(this.connectivityCheckInterval);
       this.connectivityCheckInterval = null;
-      debugLog('ConnectivityMonitor', 'Monitoring stopped');
     }
   }
 

@@ -1,5 +1,5 @@
 import { ITask } from '../models/task.model';
-import { debugLog, errorLog, infoLog, warnLog } from '../utils/debug-file-logger';
+import { errorLog, warnLog } from '../utils/debug-file-logger';
 
 /**
  * BiddingLoopService - Manages bidding loop execution and scheduling
@@ -95,7 +95,6 @@ class BiddingLoopService {
     this.cleanupTaskResources = config.cleanupTaskResources;
     this.clearTaskTimers = config.clearTaskTimers;
 
-    debugLog('STARTUP', 'Bidding loop service initialized');
   }
 
   /**
@@ -111,7 +110,6 @@ class BiddingLoopService {
     const mpKey = marketplace.toLowerCase() as 'opensea' | 'magiceden' | 'blur';
     const startTime = Date.now();
 
-    infoLog('MarketplaceExec', `EXEC_ENTRY | taskId=${taskId} | marketplace=${marketplace} | maxRetries=${maxRetries}`, { taskId, marketplace: mpKey });
 
     // Reset per-loop stats for this marketplace at the START of each new loop
     // This ensures skipStats and errorStats show per-loop counts, not cumulative across loops
@@ -140,12 +138,10 @@ class BiddingLoopService {
         const isBlacklisted = this.isTaskBlacklisted(taskId, mpKey);
 
         if (!currentTask?.running) {
-          infoLog('MarketplaceExec', `EXEC_ABORT | taskId=${taskId} | marketplace=${marketplace} | reason=task_not_running`, { taskId, marketplace: mpKey });
           return;
         }
 
         if (isBlacklisted) {
-          infoLog('MarketplaceExec', `EXEC_ABORT | taskId=${taskId} | marketplace=${marketplace} | reason=task_blacklisted`, { taskId, marketplace: mpKey });
           return;
         }
 
@@ -174,7 +170,6 @@ class BiddingLoopService {
         const attemptDuration = Date.now() - attemptStart;
         const totalDuration = Date.now() - startTime;
 
-        infoLog('MarketplaceExec', `EXEC_SUCCESS | taskId=${taskId} | marketplace=${marketplace} | attempt=${attempt + 1}/${maxRetries} | attemptMs=${attemptDuration} | totalMs=${totalDuration}`, { taskId, marketplace: mpKey });
         return; // Success - exit retry loop
 
       } catch (error) {
@@ -194,7 +189,6 @@ class BiddingLoopService {
           const currentTask = this.activeTasks.get(taskId);
           const canRecover = currentTask?.running && !this.isTaskBlacklisted!(taskId, mpKey);
           if (canRecover) {
-            infoLog('MarketplaceExec', `EXEC_FALLBACK | taskId=${taskId} | marketplace=${marketplace} | action=scheduleNextLoop`, { taskId, marketplace: mpKey });
             this.scheduleNextLoop(taskId, marketplace);
           } else {
             warnLog('MarketplaceExec', `EXEC_NO_RECOVERY | taskId=${taskId} | marketplace=${marketplace} | reason=${!currentTask?.running ? 'not_running' : 'blacklisted'}`, { taskId, marketplace: mpKey });
@@ -591,11 +585,7 @@ class BiddingLoopService {
         }
       }
 
-      // TaskFlow logging: Timeout created successfully - using infoLog for visibility
-      infoLog('LoopScheduler',
-        `TIMER_SCHEDULED | taskId=${taskId} | marketplace=${marketplace || 'all'} | timerKey=${timerKey} | loopInterval=${loopInterval}s | nextFireAt=${nextLoopTime.toISOString()}`,
-        { taskId, marketplace: mpKeyForLog, timerKey, loopInterval, nextLoopTime: nextLoopTime.toISOString() }
-      );
+      // TaskFlow logging: Timeout created successfully
 
     } catch (error) {
       // If scheduling fails, clean up resources

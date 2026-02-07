@@ -2,9 +2,10 @@ import WebSocket from 'ws';
 import { EventEmitter } from 'events';
 import PQueue from 'p-queue';
 import { LRUCache } from 'lru-cache';
-import { warnLog, errorLog, debugLog, infoLog } from './debug-file-logger';
+import { warnLog, errorLog} from './debug-file-logger';
 import { config } from 'dotenv';
-import { recordForwarding } from '../services/unified-latency-tracker';
+import { recordForwarding } from '../services/forwarding-latency-tracker';
+import { RATE_LIMIT } from '..';
 
 config()
 
@@ -179,14 +180,12 @@ class WebSocketManager extends EventEmitter {
     // Initialize p-queue for message processing with hardcoded concurrency
     // Queue is unbounded - relies on concurrency limiting and upstream flow control
     this.messageQueue = new PQueue({
-      concurrency: 1024,     // Hardcoded concurrency for optimal throughput
+      concurrency: RATE_LIMIT * 1.5,     // Hardcoded concurrency for optimal throughput
       timeout: 30000,       // 30s timeout per message
       throwOnTimeout: false // Graceful failures instead of crashing
     });
 
     // Log the configured concurrency
-    infoLog('WebSocketManager', `Message queue initialized | concurrency=1024 | ` +
-      `estimatedCapacity=3400msg/sec`);
 
     // Load persistent listing subscriptions on initialization
     this.loadPersistentSubscriptions();
@@ -264,7 +263,6 @@ class WebSocketManager extends EventEmitter {
 
         // Log successful reconnection before resetting counter
         if (this.retryCount > 0) {
-          infoLog('WsProxyReconnect', `SUCCESS | attempts=${this.retryCount} | reconnected after ${this.retryCount} attempt(s)`);
         }
 
         this.retryCount = 0;
@@ -307,8 +305,6 @@ class WebSocketManager extends EventEmitter {
     this.sendFailureCount = 0; // Reset send failure counter on successful connection
 
     // Log connection established with current state
-    infoLog('WebSocket', `[CONNECT] Established | connectionId=${connectionId} | totalConnections=${this.metrics.totalConnections} | activeSubscriptions=${this.activeSubscriptions.size}`);
-    debugLog('WebSocket', `[CONNECT] Details | persistentListings=${this.persistentListingSubscriptions.size} | queueSize=${this.messageQueue.size}`);
 
     // Enable TCP keepalive for faster dead connection detection
     try {
@@ -572,7 +568,6 @@ class WebSocketManager extends EventEmitter {
 
   private async syncSubscriptions(): Promise<void> {
     try {
-      infoLog('WebSocket', `[SYNC] Starting subscription sync after reconnection | persistentListings=${this.persistentListingSubscriptions.size} | persistentBidding=${this.persistentBiddingSubscriptions.size} | activeBeforeClear=${this.activeSubscriptions.size}`);
 
       // First, request current subscriptions from server to verify state
       this.requestSubscriptions();
@@ -637,7 +632,6 @@ class WebSocketManager extends EventEmitter {
         }
       }
 
-      infoLog('WebSocket', `[SYNC] Subscription sync complete | biddingCollections=${subscribedSlugs.size} | listingCollections=${subscribedListings.size} | failed=${failedSubscriptions.length} | failedList=${failedSubscriptions.join(',') || 'none'} | finalActiveSlugs=${this.getActiveSlugsList()}`);
 
       // Update metrics
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
@@ -835,13 +829,11 @@ class WebSocketManager extends EventEmitter {
         // Record latency for metrics (pass timestamps for unified tracking)
         this.recordLatency(latency, marketplace, msgTimestamp, receiveTime);
 
-        // Tier-based latency logging
+        // Only log high/critical latency events (>2000ms) to reduce log volume
         if (latency > 5000) {
           errorLog('EventLatency', `CRITICAL | latency=${latency}ms | marketplace=${marketplace} | slug=${slug} | orderHash=${parsed.orderHash?.substring(0, 16)}`);
-        } else if (latency > 1000) {
+        } else if (latency > 2000) {
           warnLog('EventLatency', `HIGH | latency=${latency}ms | marketplace=${marketplace} | slug=${slug}`);
-        } else if (latency > 100) {
-          debugLog('EventLatency', `MODERATE | latency=${latency}ms | marketplace=${marketplace}`);
         }
       }
 
@@ -869,11 +861,9 @@ class WebSocketManager extends EventEmitter {
         // This prevents rapid reconnection cascade when ws-proxy broadcasts shutdown during our reconnection
         const connectionAge = this.metrics.connectionStartTime ? Date.now() - this.metrics.connectionStartTime : 0;
         if (connectionAge < 5000) {
-          infoLog('WebSocket', `[SHUTDOWN] Ignoring server_shutdown - connection too fresh (${connectionAge}ms age, need 5000ms)`);
           return;
         }
 
-        infoLog('WebSocket', `[SHUTDOWN] Server shutdown notification received - triggering reconnection (connectionAge=${connectionAge}ms)`);
         this.emit('server_shutdown', message);
         // Close connection to trigger reconnection (use 1001 to indicate going away, not 1000 which prevents reconnect)
         try {
@@ -991,8 +981,6 @@ class WebSocketManager extends EventEmitter {
 
     // Enhanced disconnect logging
     const disconnectDuration = this.metrics.connectionDuration ? Math.floor(this.metrics.connectionDuration / 60000) : 0;
-    infoLog('WebSocket', `[DISCONNECT] Connection closed | code=${event.code} | reason=${event.reason} | durationMinutes=${disconnectDuration}`);
-    debugLog('WebSocket', `[DISCONNECT] State | missedPongs=${this.missedPongs} | lastMessageAge=${now - this.lastMessageReceived}ms | activeSubscriptions=${this.activeSubscriptions.size}`);
 
     // Clear intervals and timeouts
     this.clearAllIntervals();
@@ -1103,7 +1091,6 @@ class WebSocketManager extends EventEmitter {
     this.retryCount++;
 
     // Log reconnection attempt
-    infoLog('WsProxyReconnect', `attempt=${this.retryCount} | delay=${delay}ms | maxRetries=${this.config.maxRetries || 'infinite'} | reason=attemptReconnect`);
 
     this.setTimeout('reconnect', () => {
       this.connect().catch(() => {
@@ -1276,7 +1263,6 @@ class WebSocketManager extends EventEmitter {
       // Force resubscribe if we haven't received messages recently
       const now = Date.now();
       if (this.lastMessageReceived > 0 && (now - this.lastMessageReceived) > 60000) {
-        infoLog('WebSocket', `[SUBSCRIBE] Forcing resubscription due to no recent messages | subscriptionId=${subscriptionId} | timeSinceLastMessage=${now - this.lastMessageReceived}ms`);
         // Continue with subscription
       } else {
         return;
@@ -1293,8 +1279,6 @@ class WebSocketManager extends EventEmitter {
     };
 
     // Log subscription attempt
-    infoLog('WebSocket', `[SUBSCRIBE] Starting | slug=${slug} | marketplace=${marketplace} | type=${subscriptionType}`);
-    debugLog('WebSocket', `[SUBSCRIBE] Sending | event=${eventName} | contractAddress=${contractAddress}`);
 
     try {
       // Send message without waiting for response
@@ -1328,7 +1312,6 @@ class WebSocketManager extends EventEmitter {
       this.metrics.subscriptionCount = this.activeSubscriptions.size;
 
       // Log successful subscription with full state
-      infoLog('WebSocket', `[SUBSCRIBE] Complete | subscriptionId=${subscriptionId} | totalActive=${this.activeSubscriptions.size} | activeSlugs=${this.getActiveSlugsList()}`);
 
       this.emit('subscribed', { slug, marketplace, subscriptionType });
 
@@ -1352,7 +1335,6 @@ class WebSocketManager extends EventEmitter {
     const normalizedMarketplace = marketplace?.toLowerCase();
 
     // Log state BEFORE unsubscription
-    infoLog('WebSocket', `[UNSUBSCRIBE] Starting | slug=${slug} | marketplace=${normalizedMarketplace || 'ALL'}`);
 
     // Handle both bidding and listing unsubscriptions
     const unsubscribeBidding = {
@@ -1438,7 +1420,6 @@ class WebSocketManager extends EventEmitter {
       }
 
       // Log state AFTER unsubscription
-      infoLog('WebSocket', `[UNSUBSCRIBE] Complete | slug=${slug} | removedKeys=${removedKeys.join(',') || 'none'} | remainingActive=${this.activeSubscriptions.size} | activeSlugs=${this.getActiveSlugsList()}`);
 
       this.emit('unsubscribed', { slug, marketplace });
 
@@ -1679,9 +1660,7 @@ class WebSocketManager extends EventEmitter {
 
         // Log what was loaded from persistent storage
         const loadedSlugs = Array.from(this.persistentListingSubscriptions.values()).map(v => v.slug);
-        infoLog('WebSocket', `[PERSISTENT] Loaded persistent listing subscriptions from file | count=${this.persistentListingSubscriptions.size} | slugs=${loadedSlugs.join(',') || 'none'} | file=${this.subscriptionStateFile}`);
       } else {
-        infoLog('WebSocket', `[PERSISTENT] No persistent subscriptions file found | file=${this.subscriptionStateFile}`);
       }
     } catch (error) {
       warnLog('WebSocket', `[PERSISTENT] Failed to load persistent subscriptions from file | error=${error}`);
@@ -1695,7 +1674,6 @@ class WebSocketManager extends EventEmitter {
       fs.writeFileSync(this.subscriptionStateFile, JSON.stringify(subscriptions, null, 2));
 
       const savedSlugs = Array.from(this.persistentListingSubscriptions.values()).map(v => v.slug);
-      infoLog('WebSocket', `[PERSISTENT] Saved persistent subscriptions to file | count=${subscriptions.length} | slugs=${savedSlugs.join(',') || 'none'}`);
     } catch (error) {
       warnLog('WebSocket', `[PERSISTENT] Failed to save persistent subscriptions to file | error=${error}`);
     }

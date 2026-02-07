@@ -1,6 +1,6 @@
 import { Worker } from 'bullmq';
 import mongoose from 'mongoose';
-import { debugLog, errorLog, warnLog } from '../utils/debug-file-logger';
+import { errorLog, warnLog } from '../utils/debug-file-logger';
 
 /**
  * Worker Health Monitor Service
@@ -65,7 +65,6 @@ class WorkerHealthMonitorService {
    */
   public initialize(deps: WorkerHealthMonitorDependencies): void {
     this.deps = deps;
-    debugLog('WorkerHealthMonitorService', 'Initialized');
   }
 
   /**
@@ -85,7 +84,6 @@ class WorkerHealthMonitorService {
       this.checkWorkerHealth();
     }, WORKER_HEALTH_CHECK_INTERVAL);
 
-    debugLog('WorkerHealthMonitor', 'Worker health monitoring started');
   }
 
   /**
@@ -96,7 +94,6 @@ class WorkerHealthMonitorService {
       clearInterval(this.workerHealthInterval);
       this.workerHealthInterval = null;
     }
-    debugLog('WorkerHealthMonitor', 'Worker health monitoring stopped');
   }
 
   /**
@@ -285,7 +282,6 @@ class WorkerHealthMonitorService {
       const _oldConnections = connectionAges.filter(conn => conn.age > 3600); // Connections older than 1 hour
 
       // Log detailed connection pool stats to monitoring system
-      debugLog('ConnectionPool', `Redis connections: ${connectionPoolStats.length} total, ${healthSummary.connections.healthy} healthy`);
 
       // Enhanced Redis connection pool monitoring
       const maxConnections = connectionPoolStats.length;
@@ -325,7 +321,6 @@ class WorkerHealthMonitorService {
           const poolUtilization = totalConnections > 0 ? (activeConnections / maxPoolSize) * 100 : 0;
 
           // Log MongoDB pool statistics
-          debugLog('Database', `MongoDB pool: ${activeConnections}/${maxPoolSize} active (${Math.round(poolUtilization)}% utilization)`);
 
           // Warning threshold: 80% of maxPoolSize
           const warningThreshold = maxPoolSize * 0.8;

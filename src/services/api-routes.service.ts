@@ -1,5 +1,5 @@
 import { Application } from 'express';
-import { errorLog, debugLog, warnLog, infoLog } from '../utils/debug-file-logger';
+import { errorLog, warnLog} from '../utils/debug-file-logger';
 import { checkBullMQConnectionsHealth } from '../utils/redis';
 
 /**
@@ -117,7 +117,6 @@ class ApiRoutesService {
     this.deps = dependencies;
 
     this.setupRoutes();
-    infoLog('ApiRoutesService', 'Initialized with 62 endpoints');
   }
 
   /**
@@ -231,37 +230,30 @@ class ApiRoutesService {
   // Placeholder methods for other route groups
   private setupTaskRoutes(): void {
     // Task management endpoints will be added here
-    debugLog('ApiRoutesService', 'Task routes setup (placeholder)');
   }
 
   private setupCollectionRoutes(): void {
     // Collection and marketplace endpoints will be added here
-    debugLog('ApiRoutesService', 'Collection routes setup (placeholder)');
   }
 
   private setupAuthRoutes(): void {
     // Authentication endpoints will be added here
-    debugLog('ApiRoutesService', 'Auth routes setup (placeholder)');
   }
 
   private setupBlurRoutes(): void {
     // Blur-specific endpoints will be added here
-    debugLog('ApiRoutesService', 'Blur routes setup (placeholder)');
   }
 
   private setupMemoryRoutes(): void {
     // Memory and monitoring endpoints will be added here
-    debugLog('ApiRoutesService', 'Memory routes setup (placeholder)');
   }
 
   private setupDebugRoutes(): void {
     // Debug and diagnostics endpoints will be added here
-    debugLog('ApiRoutesService', 'Debug routes setup (placeholder)');
   }
 
   private setupLogRoutes(): void {
     // Log and trace endpoints will be added here
-    debugLog('ApiRoutesService', 'Log routes setup (placeholder)');
   }
 
   /**

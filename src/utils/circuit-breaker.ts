@@ -1,4 +1,4 @@
-import { debugLog, warnLog, infoLog } from './debug-file-logger';
+import { warnLog} from './debug-file-logger';
 
 /**
  * Simple Circuit Breaker implementation to prevent retry storms
@@ -24,7 +24,6 @@ export class CircuitBreaker {
     this.failureThreshold = options?.failureThreshold ?? 10; // Open after 10 failures (increased from 5)
     this.resetTimeout = options?.resetTimeout ?? 30000; // Wait 30s before retry (decreased from 60s)
     this.halfOpenRequests = options?.halfOpenRequests ?? 2; // Test with 2 requests
-    debugLog('CircuitBreaker', `CREATED | name=${name} | failureThreshold=${this.failureThreshold} | resetTimeoutMs=${this.resetTimeout} | halfOpenRequests=${this.halfOpenRequests}`);
   }
 
   async execute<T>(operation: () => Promise<T>): Promise<T> {
@@ -37,7 +36,6 @@ export class CircuitBreaker {
         throw new Error('Circuit breaker is OPEN - too many failures');
       }
       // Transition to HALF_OPEN to test if service recovered
-      infoLog('CircuitBreaker', `STATE_CHANGE | name=${this.name} | OPEN → HALF_OPEN | testing recovery`);
       this.state = 'HALF_OPEN';
       this.successCount = 0;
     }
@@ -55,10 +53,8 @@ export class CircuitBreaker {
   private onSuccess(): void {
     if (this.state === 'HALF_OPEN') {
       this.successCount++;
-      debugLog('CircuitBreaker', `HALF_OPEN_SUCCESS | name=${this.name} | successCount=${this.successCount}/${this.halfOpenRequests}`);
       if (this.successCount >= this.halfOpenRequests) {
         // Service recovered, close circuit
-        infoLog('CircuitBreaker', `STATE_CHANGE | name=${this.name} | HALF_OPEN → CLOSED | recovered`);
         this.state = 'CLOSED';
         this.successCount = 0;
       }
@@ -68,7 +64,6 @@ export class CircuitBreaker {
 
   private onFailure(): void {
     this.failureCount++;
-    debugLog('CircuitBreaker', `FAILURE | name=${this.name} | failureCount=${this.failureCount}/${this.failureThreshold} | state=${this.state}`);
 
     if (this.state === 'HALF_OPEN') {
       // Failed while testing - reopen circuit
@@ -94,7 +89,6 @@ export class CircuitBreaker {
   }
 
   reset(): void {
-    infoLog('CircuitBreaker', `RESET | name=${this.name} | previousState=${this.state}`);
     this.state = 'CLOSED';
     this.failureCount = 0;
     this.successCount = 0;
@@ -123,7 +117,6 @@ export class CircuitBreakerRegistry {
   }) {
     this.registryName = registryName;
     this.defaultOptions = defaultOptions || {};
-    debugLog('CircuitBreaker', `REGISTRY_CREATED | name=${registryName} | defaults=${JSON.stringify(this.defaultOptions)}`);
   }
 
   /**
@@ -168,7 +161,6 @@ export class CircuitBreakerRegistry {
     }
 
     if (cleanedCount > 0) {
-      debugLog('CircuitBreaker', `REGISTRY_CLEANUP | name=${this.registryName} | cleaned=${cleanedCount} | remaining=${this.breakers.size}`);
     }
   }
 
@@ -186,7 +178,6 @@ export class CircuitBreakerRegistry {
    * Reset all breakers in this registry
    */
   resetAll(): void {
-    infoLog('CircuitBreaker', `REGISTRY_RESET_ALL | name=${this.registryName} | count=${this.breakers.size}`);
     for (const breaker of this.breakers.values()) {
       breaker.reset();
     }

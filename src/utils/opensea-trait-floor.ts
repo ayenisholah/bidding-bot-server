@@ -1,5 +1,5 @@
 import { getTraitFloorPrice } from '../functions/tokenMetadata';
-import { errorLog, debugLog } from './debug-file-logger';
+import { errorLog} from './debug-file-logger';
 import {
   traitFloorLRU,
   trackTraitFloorHit,
@@ -20,13 +20,11 @@ export async function getOpenseaTraitFloor(
   const cached = traitFloorLRU.get(cacheKey);
   if (cached !== undefined) {
     trackTraitFloorHit();
-    debugLog('Performance', `[OS-TraitFloor] LRU_HIT (<1ms) | ${collectionSlug}:${traitType}:${traitValue} | price=${cached}`);
     return cached;
   }
 
   // Fetch from API (800-2500ms)
   trackTraitFloorMiss();
-  debugLog('Performance', `[OS-TraitFloor] CACHE_MISS | ${collectionSlug}:${traitType}:${traitValue} | fetching...`);
   const fetchStart = Date.now();
 
   try {
@@ -36,11 +34,9 @@ export async function getOpenseaTraitFloor(
 
     if (floorPrice !== null && floorPrice > 0) {
       traitFloorLRU.set(cacheKey, floorPrice);
-      debugLog('Performance', `[OS-TraitFloor] API_FETCH | ${collectionSlug}:${traitType}:${traitValue} | price=${floorPrice} | fetchTime=${fetchTime}ms`);
       return floorPrice;
     }
 
-    debugLog('Performance', `[OS-TraitFloor] API_FETCH | ${collectionSlug}:${traitType}:${traitValue} | price=0 (no floor) | fetchTime=${fetchTime}ms`);
     return 0;
 
   } catch (error) {
@@ -57,9 +53,7 @@ export function clearTraitFloorCache(collectionSlug?: string): void {
   traitFloorLRU.clear();
 
   if (collectionSlug) {
-    debugLog('Performance', `[OS-TraitFloor] Cleared cache for collection ${collectionSlug}`);
   } else {
-    debugLog('Performance', `[OS-TraitFloor] Cleared entire cache`);
   }
 }
 

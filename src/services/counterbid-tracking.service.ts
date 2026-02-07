@@ -1,7 +1,5 @@
 import { LRUCache } from 'lru-cache';
 import { addIfNotExists } from '../utils/lru-helpers';
-import { debugLog } from '../utils/debug-file-logger';
-
 // Constants
 const DEBUG = process.env.DEBUG === 'true';
 
@@ -201,9 +199,6 @@ class CounterbidTrackingService {
     });
 
     if (DEBUG) {
-      debugLog('ExecutionLatency',
-        `RECORDED ${marketplace} | latency=${latency}ms | success=${success} | task=${taskId} | token=${tokenId || 'N/A'}`
-      );
     }
   }
 

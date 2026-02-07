@@ -10,7 +10,7 @@
 import { ethers } from 'ethers';
 import { LRUCache } from 'lru-cache';
 import { ERC20_MIN_ABI } from '../constants';
-import { errorLog, warnLog, debugLog } from './debug-file-logger';
+import { errorLog, warnLog} from './debug-file-logger';
 
 // Import shared providers with fallback capability
 import { mainProvider as provider, fallbackProvider } from './provider';
@@ -70,7 +70,6 @@ class ApprovalCache {
     // Cache miss - check on-chain with retry logic
     for (let attempt = 1; attempt <= MAX_RPC_RETRIES; attempt++) {
       try {
-        debugLog('Balance', `[RPC] Fetching allowance attempt ${attempt}/${MAX_RPC_RETRIES} | wallet=${walletAddress.slice(0, 10)}...`);
 
         // Create timeout promise
         const timeoutPromise = new Promise<never>((_, reject) => {
@@ -93,7 +92,6 @@ class ApprovalCache {
 
         await this.setApproval(walletAddress, marketplaceAddress, tokenAddress, entry);
 
-        debugLog('Balance', `[RPC] Success: allowance=${allowance.toString()} | wallet=${walletAddress.slice(0, 10)}...`);
         return approved;
       } catch (error: any) {
         const errorMsg = error?.message || String(error);
@@ -126,7 +124,6 @@ class ApprovalCache {
             };
             await this.setApproval(walletAddress, marketplaceAddress, tokenAddress, entry);
 
-            debugLog('Balance', `[RPC] Fallback success: allowance=${allowance.toString()} | wallet=${walletAddress.slice(0, 10)}...`);
             return approved;
           } catch (fallbackError: any) {
             errorLog('Balance', `[RPC] Both providers failed | wallet=${walletAddress.slice(0, 10)}...`, fallbackError);

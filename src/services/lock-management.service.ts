@@ -1,5 +1,3 @@
-import { debugLog } from '../utils/debug-file-logger';
-
 // Constants
 const LOCK_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 const SCHEDULED_BID_LOCK_DURATION_MS = 15 * 60 * 1000; // 15 minutes
@@ -44,7 +42,6 @@ class LockManagementService {
    * Initialize the service
    */
   public initialize(): void {
-    debugLog('LockManagementService', 'Initialized');
   }
 
   // =============================================================================
@@ -246,7 +243,6 @@ class LockManagementService {
     }
 
     if (cleanedCount > 0) {
-      debugLog('LockManagement', `Cleaned ${cleanedCount} stale locks`);
     }
 
     return cleanedCount;

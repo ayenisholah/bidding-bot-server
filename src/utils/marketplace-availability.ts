@@ -1,6 +1,4 @@
 import { LRUCache } from 'lru-cache';
-import { debugLog } from './debug-file-logger';
-
 type Marketplace = 'blur' | 'magiceden' | 'opensea';
 
 const UNAVAILABLE_TTL = 3600 * 1000; // 1 hour in milliseconds
@@ -41,7 +39,6 @@ export function markCollectionUnavailable(
 
   if (!loggedUnavailable.has(cacheKey)) {
     loggedUnavailable.add(cacheKey);
-    debugLog('Marketplace', `Collection not available on ${marketplace} | identifier=${identifier} | status=${statusCode} | cached for 1 hour`);
   }
 }
 

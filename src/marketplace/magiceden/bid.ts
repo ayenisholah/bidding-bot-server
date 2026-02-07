@@ -15,7 +15,7 @@ import { fetchERC20Balance } from "../../utils/balance";
 import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { InsufficientBalanceError, MinimumPriceError, RateLimitError, InvalidRequestError } from "../errors";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
-import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
+import { errorLog, warnLog} from "../../utils/debug-file-logger";
 import { LRUCache } from 'lru-cache';
 import { addIfNotExists } from '../../utils/lru-helpers';
 import { apiDedup } from "../../utils/api-dedup";
@@ -436,7 +436,6 @@ async function createBidData(
 
   // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
   if (isTaskBlacklisted(taskId, 'magiceden')) {
-    debugLog('InFlightBid', `CREATE_BID_BLOCKED_EARLY | taskId=${taskId} | marketplace=magiceden | reason=blacklisted`, { taskId, marketplace: 'magiceden' });
     return null;
   }
 
@@ -451,7 +450,6 @@ async function createBidData(
       const { data: order } = await limiter.schedule(async () => {
         // Re-check blacklist AFTER waiting in limiter queue
         if (isTaskBlacklisted(taskId, 'magiceden')) {
-          debugLog('InFlightBid', `BUILD_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=magiceden | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'magiceden' });
           throw new Error('Task stopped while waiting in limiter queue');
         }
 
@@ -881,7 +879,6 @@ async function sendSignedOrderData(
 
     // check if the tasks is still active before you make the offer
     if (isTaskBlacklisted(taskId, 'magiceden')) {
-      debugLog('InFlightBid', `BLOCKED_EARLY | taskId=${taskId} | marketplace=magiceden | reason=blacklisted`, { taskId, marketplace: 'magiceden' });
       return;
     }
     const currentTask = activeTasks.get(taskId)
@@ -900,7 +897,6 @@ async function sendSignedOrderData(
       const { data: offerResponse } = await limiter.schedule(async () => {
         // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
         if (isTaskBlacklisted(taskId, 'magiceden')) {
-          debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=magiceden | waitTime=${Date.now() - bidStartTime}ms`, { taskId, marketplace: 'magiceden' });
           throw new Error('Task stopped while waiting in limiter queue');
         }
 
@@ -2181,26 +2177,22 @@ export async function cancelMagicedenRequest(taskId: string): Promise<number> {
 
   const controllers = activeRequests.get(taskId);
   if (!controllers || controllers.length === 0) {
-    debugLog('HttpAbort', `CANCEL_NOOP | marketplace=magiceden | taskId=${taskId} | reason=no_active_requests`);
     return 0;
   }
 
   const count = controllers.length;
-  debugLog('HttpAbort', `CANCEL_START | marketplace=magiceden | taskId=${taskId} | activeRequestCount=${count}`);
 
   let cancelledCount = 0;
   for (let i = 0; i < controllers.length; i++) {
     try {
       controllers[i].abort();
       cancelledCount++;
-      debugLog('HttpAbort', `ABORT_REQUEST | marketplace=magiceden | taskId=${taskId} | requestIndex=${i}`);
     } catch (err) {
       errorLog('HttpAbort', `ABORT_ERROR | marketplace=magiceden | taskId=${taskId} | requestIndex=${i} | error=${(err as Error).message}`, err);
     }
   }
 
   activeRequests.delete(taskId);
-  debugLog('HttpAbort', `CANCEL_COMPLETE | marketplace=magiceden | taskId=${taskId} | cancelledCount=${cancelledCount}`);
 
   return cancelledCount;
 }

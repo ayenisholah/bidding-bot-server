@@ -1,6 +1,6 @@
 import crypto from 'crypto';
 import { config } from "dotenv"
-import { debugLog, errorLog, warnLog } from './debug-file-logger'
+import { errorLog, warnLog } from './debug-file-logger'
 import { LRUCache } from 'lru-cache';
 
 config()
@@ -64,12 +64,10 @@ export async function recoverPasswordFromRedis(): Promise<boolean> {
     const remainingMs = (PASSWORD_TTL * 1000) - (Date.now() - PASSWORD_TIMESTAMP);
     const days = Math.floor(remainingMs / (1000 * 60 * 60 * 24));
     const hours = Math.floor((remainingMs % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
-    debugLog('Crypto', `[DEV] Password still valid in memory (expires in ${days} days, ${hours} hours)`);
     return true;
   }
 
   // Password expired or not set
-  debugLog('Crypto', '[DEV] No valid password found in memory');
   return false;
 }
 
@@ -87,7 +85,6 @@ export async function setPassword(password: string): Promise<void> {
   if (process.env.NODE_ENV !== 'production') {
     const days = Math.floor(PASSWORD_TTL / 86400);
     const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
-    debugLog('Crypto', `[DEV] Password stored in memory (TTL: ${days} days, ${hours} hours)`);
   }
   // Production: password only stored in memory (no persistence)
 }
@@ -110,7 +107,6 @@ export async function renewPasswordTTL(): Promise<void> {
   PASSWORD_TIMESTAMP = Date.now();
   const days = Math.floor(PASSWORD_TTL / 86400);
   const hours = Math.floor((PASSWORD_TTL % 86400) / 3600);
-  debugLog('Crypto', `[DEV] Password TTL renewed for ${days} days, ${hours} hours`);
 }
 
 // Clear password from all storage
@@ -126,7 +122,6 @@ export async function clearPassword(): Promise<void> {
 
   // Development only: already cleared from memory
   if (process.env.NODE_ENV !== 'production') {
-    debugLog('Crypto', '[DEV] Password cleared from memory');
   }
   // Production: password only in memory, already cleared above
 }
@@ -312,7 +307,6 @@ export async function reEncryptWallet(
 export function clearDecryptedKey(encryptedPrivateKeyHex: string): void {
   const deleted = decryptedKeyCache.delete(encryptedPrivateKeyHex);
   if (deleted) {
-    debugLog('Crypto', `[KEY_CACHE] Evicted key from cache | keyPrefix=${encryptedPrivateKeyHex.slice(0, 16)}...`);
   }
 }
 
@@ -323,7 +317,6 @@ export function clearAllDecryptedKeys(): void {
   const size = decryptedKeyCache.size;
   decryptedKeyCache.clear();
   cacheStats = { hits: 0, misses: 0, sets: 0 };
-  debugLog('Crypto', `[KEY_CACHE] Cleared all cached keys | count=${size}`);
 }
 
 /**
@@ -359,7 +352,6 @@ export function getDecryptionCacheStats() {
 // Format: "gcm:iv:authTag:encrypted" for new GCM encrypted passwords
 // Legacy ECB format: just hex string (no colons) - for backward compatibility
 export function encryptPassword(password: string): string {
-  debugLog('Crypto', 'ENCRYPT_PASSWORD | mode=GCM | ivLength=16');
 
   const key = getPasswordEncryptionKey();
   const iv = crypto.randomBytes(16);
@@ -375,20 +367,17 @@ export function encryptPassword(password: string): string {
   // Prefix with "gcm:" to identify new format
   const result = `gcm:${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted}`;
 
-  debugLog('Crypto', `ENCRYPT_PASSWORD | SUCCESS | format=gcm:iv:authTag:encrypted | outputLength=${result.length}`);
   return result;
 }
 
 export function decryptPassword(encryptedPassword: string): string {
   const isGcmFormat = encryptedPassword.startsWith('gcm:');
-  debugLog('Crypto', `DECRYPT_PASSWORD | inputLength=${encryptedPassword.length} | format=${isGcmFormat ? 'GCM' : 'LEGACY_ECB'}`);
 
   const key = getPasswordEncryptionKey();
 
   try {
     // Check if this is new GCM format (starts with "gcm:")
     if (isGcmFormat) {
-      debugLog('Crypto', 'DECRYPT_PASSWORD | mode=GCM | parsing iv:authTag:encrypted');
 
       // New GCM format: gcm:iv:authTag:encrypted
       const parts = encryptedPassword.slice(4).split(':'); // Remove "gcm:" prefix
@@ -406,21 +395,18 @@ export function decryptPassword(encryptedPassword: string): string {
       let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
 
-      debugLog('Crypto', 'DECRYPT_PASSWORD | SUCCESS');
       return decrypted;
     }
 
     // Legacy ECB format (no colons or doesn't start with "gcm:")
     // This provides backward compatibility during migration
     warnLog('Crypto', 'Decrypting password with legacy ECB mode - will be re-encrypted with GCM on next use');
-    debugLog('Crypto', 'DECRYPT_PASSWORD | LEGACY_ECB_FALLBACK | migrating to GCM on next use');
 
     const decipher = crypto.createDecipheriv(DETERMINISTIC_ALGORITHM, key, null);
 
     let decrypted = decipher.update(encryptedPassword, "hex", "utf8");
     decrypted += decipher.final("utf8");
 
-    debugLog('Crypto', 'DECRYPT_PASSWORD | SUCCESS');
     return decrypted;
   } catch (error) {
     errorLog('Crypto', 'Failed to decrypt password', error);
@@ -435,11 +421,6 @@ export function decryptPassword(encryptedPassword: string): string {
 // Log cache stats every 5 minutes
 setInterval(() => {
   const stats = getDecryptedKeyCacheStats();
-  debugLog('Performance',
-    `[KEY_CACHE] Stats | size=${stats.size}/${stats.max} | ` +
-    `hitRate=${stats.hitRate} (${stats.hits}/${stats.hits + stats.misses}) | ` +
-    `sets=${stats.sets}`
-  );
 }, 5 * 60 * 1000);
 /**
  * Get decrypted key cache for debugging/monitoring

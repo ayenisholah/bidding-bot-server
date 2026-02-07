@@ -61,7 +61,6 @@
 		"json-stable-stringify": "^1.3.0",
 		"lru-cache": "^11.2.4",
 		"mongoose": "8.15.2",
-		"p-limit": "^7.3.0",
 		"p-queue": "^6.6.2",
 		"papaparse": "5.5.3",
 		"uuid": "^11.1.0",

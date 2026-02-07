@@ -1,6 +1,6 @@
 import { IWallet } from '../models/wallet.model';
 import { decryptPrivateKey, clearDecryptedKey } from './crypto';
-import { errorLog, debugLog } from './debug-file-logger';
+import { errorLog} from './debug-file-logger';
 import Wallet from '../models/wallet.model';
 import { LRUCache } from 'lru-cache';
 
@@ -34,11 +34,9 @@ class WalletCache {
       updateAgeOnGet: false,  // Don't reset TTL on reads
       allowStale: false,
       dispose: (value, key) => {
-        debugLog('WalletCache', `LRU_EVICT_WALLET | address=${key} | reason=cache full | cacheSize=${this.walletDataLRU.size}/1000`);
       }
     });
 
-    debugLog('WalletCache', 'LRU cache initialized | walletMax=1000 | TTL=NONE | eviction=LRU_only');
   }
 
   /**
@@ -53,15 +51,12 @@ class WalletCache {
 
   async initialize(password: string) {
     this.password = password;
-    debugLog('WalletCache', 'Initializing wallet cache with password');
     await this.loadAllWallets();
-    debugLog('WalletCache', `Wallet cache initialized | wallets=${this.walletDataLRU.size} | max=1000`);
   }
 
   private async loadAllWallets() {
     try {
       const wallets = await Wallet.find({}).lean();
-      debugLog('WalletCache', `Loading ${wallets.length} wallets from database`);
 
       for (const wallet of wallets) {
         const address = wallet.address.toLowerCase();
@@ -75,7 +70,6 @@ class WalletCache {
         });
       }
 
-      debugLog('WalletCache', `Loaded ${this.walletDataLRU.size} wallets into LRU cache (NO TTL, max=1000)`);
     } catch (error) {
       errorLog('[Database]', 'Failed to initialize wallet cache', error as Error);
     }
@@ -87,16 +81,13 @@ class WalletCache {
     // Check cache first
     const cached = this.walletDataLRU.get(normalizedAddress);
     if (cached) {
-      debugLog('WalletCache', `CACHE_HIT | wallet=${normalizedAddress} | cacheSize=${this.walletDataLRU.size}/1000`);
       return cached as unknown as IWallet;
     }
 
-    debugLog('WalletCache', `CACHE_MISS | wallet=${normalizedAddress} | fetching from DB`);
 
     // Check if there's already an in-flight request for this address
     const inFlight = this.inFlightByAddress.get(normalizedAddress);
     if (inFlight) {
-      debugLog('WalletCache', `IN_FLIGHT | wallet=${normalizedAddress} | waiting for existing request`);
       return inFlight;
     }
 
@@ -117,10 +108,8 @@ class WalletCache {
             user: String(wallet.user),
             tasks: (wallet as any).tasks
           });
-          debugLog('WalletCache', `DB_FETCH_SUCCESS | wallet=${normalizedAddress} | cached | cacheSize=${this.walletDataLRU.size}/1000`);
           return wallet;
         }
-        debugLog('WalletCache', `DB_FETCH_NOT_FOUND | wallet=${normalizedAddress}`);
         return null;
       } catch (error) {
         errorLog('[Database]', `Failed to fetch wallet from database - address=${address}`, error as Error);
@@ -215,12 +204,10 @@ class WalletCache {
       }
     }
 
-    debugLog('WalletCache', `CACHE_MISS_BY_ID | walletId=${walletId} | fetching from DB`);
 
     // Check if there's already an in-flight request for this wallet ID
     const inFlight = this.inFlightById.get(walletId);
     if (inFlight) {
-      debugLog('WalletCache', `IN_FLIGHT_BY_ID | walletId=${walletId} | waiting for existing request`);
       return inFlight;
     }
 
@@ -242,10 +229,8 @@ class WalletCache {
             user: String(wallet.user),
             tasks: (wallet as any).tasks
           });
-          debugLog('WalletCache', `DB_FETCH_SUCCESS_BY_ID | walletId=${walletId} | address=${address} | cached | cacheSize=${this.walletDataLRU.size}/1000`);
           return wallet;
         }
-        debugLog('WalletCache', `DB_FETCH_NOT_FOUND_BY_ID | walletId=${walletId}`);
         return null;
       } catch (error) {
         errorLog('[Database]', `Failed to fetch wallet by ID from database - walletId=${walletId}`, error as Error);
@@ -272,19 +257,16 @@ class WalletCache {
 
     // Clear wallet metadata from this cache
     this.walletDataLRU.delete(normalizedAddress);
-    debugLog('WalletCache', `INVALIDATE_WALLET | address=${normalizedAddress} | cacheSize=${this.walletDataLRU.size}/1000`);
   }
 
   invalidateAll() {
     const walletCount = this.walletDataLRU.size;
     this.walletDataLRU.clear();
-    debugLog('WalletCache', `INVALIDATE_ALL | cleared=${walletCount} wallets | cacheSize=0/1000`);
   }
 
   destroy() {
     const walletCount = this.walletDataLRU.size;
     this.walletDataLRU.clear();
-    debugLog('WalletCache', `DESTROY | cleared=${walletCount} wallets | cache destroyed`);
   }
 
   /**

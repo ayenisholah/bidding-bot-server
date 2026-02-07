@@ -1,4 +1,4 @@
-import { debugLog, warnLog, errorLog } from '../utils/debug-file-logger';
+import { warnLog, errorLog } from '../utils/debug-file-logger';
 
 /**
  * Memory Cleanup Service
@@ -40,7 +40,6 @@ class MemoryCleanupService {
   public initialize(deps: MemoryCleanupDependencies): void {
     this.deps = deps;
     this.startCleanupIntervals();
-    debugLog('MemoryCleanupService', 'Initialized with periodic cleanup intervals');
   }
 
   /**
@@ -71,7 +70,6 @@ class MemoryCleanupService {
       this.cleanupBlurCaches();
     }, 5 * 60 * 1000));
 
-    debugLog('MemoryCleanup', `Started ${this.cleanupIntervals.length} cleanup intervals`);
   }
 
   /**
@@ -92,7 +90,6 @@ class MemoryCleanupService {
     }
 
     if (cleaned > 0) {
-      debugLog('MemoryCleanup', `Cleaned ${cleaned} stale entries from queueingProgress (TTL: 5min)`);
     }
   }
 
@@ -139,7 +136,6 @@ class MemoryCleanupService {
     }
 
     if (cleaned > 0) {
-      debugLog('MemoryCleanup', `Cleaned ${cleaned} entries from failed task queues (TTL: 30min, max retries: 5)`);
     }
   }
 
@@ -172,7 +168,6 @@ class MemoryCleanupService {
     }
 
     if (cleaned > 0) {
-      debugLog('MemoryCleanup', `Cleaned ${cleaned} stale locks (age threshold: 30min)`);
     }
   }
 
@@ -195,7 +190,6 @@ class MemoryCleanupService {
         }
       }
       if (cleaned > 0) {
-        debugLog('MemoryCleanup', `Cleaned ${cleaned} expired transfer-restricted collections (24h TTL)`);
       }
     }
 
@@ -223,7 +217,6 @@ class MemoryCleanupService {
   public stopCleanup(): void {
     this.cleanupIntervals.forEach(interval => clearInterval(interval));
     this.cleanupIntervals = [];
-    debugLog('MemoryCleanupService', 'Stopped all cleanup intervals');
   }
 
   /**

@@ -2,22 +2,22 @@
  * Dynamic concurrency allocation between main and counterbid queues
  *
  * Strategy:
- * - Counterbid concurrency: FIXED at RATE_LIMIT × 1.5 (maximum priority)
- * - Main concurrency: DYNAMIC, inversely proportional to counterbid job count
- *   - 0 jobs → Main = RATE_LIMIT × 1.5
- *   - RATE_LIMIT jobs → Main = 1
- *   - Linear interpolation between these points
- * - Total concurrency: VARIABLE (ranges from RATE_LIMIT × 1.5 + 1 to RATE_LIMIT × 3)
+ * - Counterbid concurrency: FIXED at RATE_LIMIT (maximum priority)
+ * - Main concurrency: DYNAMIC with protective floor
+ *   - 0 jobs → Main = RATE_LIMIT
+ *   - Floor: RATE_LIMIT / 4 (prevents complete starvation)
+ *   - Formula: max(RATE_LIMIT / 4, RATE_LIMIT - activeCounterbidJobs)
+ * - Total concurrency: VARIABLE (ranges from RATE_LIMIT + RATE_LIMIT/4 to RATE_LIMIT × 2)
  * - Real-time adjustment: Updates immediately on every job add/complete/fail event
  *
  * Example (RATE_LIMIT = 100):
- * - 0 CB jobs: CB=150, Main=150, Total=300
- * - 50 CB jobs: CB=150, Main=75, Total=225
- * - 100 CB jobs: CB=150, Main=1, Total=151
+ * - 0 CB jobs: CB=100, Main=100, Total=200
+ * - 50 CB jobs: CB=100, Main=50, Total=150
+ * - 76+ CB jobs: CB=100, Main=25 (floor), Total=125
  */
 
 import { Worker } from 'bullmq';
-import { infoLog, warnLog, debugLog } from '../utils/debug-file-logger';
+import { warnLog } from '../utils/debug-file-logger';
 
 class ConcurrencyManager {
   private activeCounterbidJobs = 0;
@@ -33,16 +33,14 @@ class ConcurrencyManager {
     counterbidConcurrency: number;
     mainConcurrency: number;
   }> = [];
+  private lastLoggedActive = 0; // Track last logged value for threshold-based logging
 
   constructor(totalConcurrency: number) {
     this.totalConcurrency = totalConcurrency;
     this.rateLimit = Number(process.env.RATE_LIMIT || 8);
+    this.minConcurrency = Math.floor(this.rateLimit / 4);
 
     // Log initialization with formula
-    infoLog(
-      'ConcurrencyManager',
-      `Initialized | totalConcurrency=${totalConcurrency} | rateLimit=${this.rateLimit} | Strategy: CB fixed at ${totalConcurrency}, Main dynamic 1-${totalConcurrency}`
-    );
   }
 
   /**
@@ -51,7 +49,6 @@ class ConcurrencyManager {
   setWorkers(mainWorkers: Worker[], counterbidWorkers: Worker[]) {
     this.mainWorkers = mainWorkers;
     this.counterbidWorkers = counterbidWorkers;
-    infoLog('ConcurrencyManager', `Workers set - ready for dynamic allocation | main=${mainWorkers.length} | counterbid=${counterbidWorkers.length}`);
   }
 
   /**
@@ -75,30 +72,27 @@ class ConcurrencyManager {
   /**
    * Adjust worker concurrency based on current counterbid workload
    *
-   * New allocation formula (fixed counterbid priority):
-   * - Counterbid concurrency: FIXED at maxConcurrency (RATE_LIMIT × 1.5)
-   * - Main concurrency: Inversely proportional to counterbid job count
-   *   - Linear interpolation: maxConcurrency → 1 as jobs go from 0 → RATE_LIMIT
-   *   - Formula: 1 + (maxConcurrency - 1) × (1 - min(activeJobs, RATE_LIMIT) / RATE_LIMIT)
+   * New allocation formula (fixed counterbid priority with floor protection):
+   * - Counterbid concurrency: FIXED at RATE_LIMIT
+   * - Main concurrency: RATE_LIMIT - activeCounterbidJobs, with floor at RATE_LIMIT/4
+   *   - Formula: max(RATE_LIMIT / 4, RATE_LIMIT - activeCounterbidJobs)
    *
-   * Example (RATE_LIMIT=100, maxConcurrency=150):
-   * - 0 jobs: CB=150, Main=150, Total=300
-   * - 50 jobs: CB=150, Main=75, Total=225
-   * - 100 jobs: CB=150, Main=1, Total=151
+   * Example (RATE_LIMIT=100):
+   * - 0 jobs: CB=100, Main=100, Total=200
+   * - 50 jobs: CB=100, Main=50, Total=150
+   * - 76+ jobs: CB=100, Main=25 (floor), Total=125
    */
   private adjustConcurrency() {
-    const MAX_CONCURRENCY = this.totalConcurrency; // RATE_LIMIT × 1.5
-    const MIN = this.minConcurrency;
+    const MAX_CONCURRENCY = this.totalConcurrency; // RATE_LIMIT
+    const MIN_MAIN = Math.floor(this.rateLimit / 4);
     const active = this.activeCounterbidJobs;
 
     // Counterbid: FIXED at maximum concurrency (never changes)
     const cbConcurrency = MAX_CONCURRENCY;
 
-    // Main: DYNAMIC, inversely proportional to counterbid job count
-    // Clamp active jobs to RATE_LIMIT to prevent negative concurrency
-    const clampedActive = Math.min(active, this.rateLimit);
-    const ratio = clampedActive / this.rateLimit;
-    const mainConcurrency = Math.max(MIN, Math.round(MAX_CONCURRENCY * (1 - ratio)));
+    // Main: DYNAMIC with floor protection
+    // Floor kicks in when active jobs exceed (RATE_LIMIT - RATE_LIMIT/4) = 76+ for RATE_LIMIT=100
+    const mainConcurrency = Math.max(MIN_MAIN, this.rateLimit - active);
 
     // Distribute concurrency evenly across workers in each array
     // Split counterbid concurrency evenly across counterbid workers
@@ -137,19 +131,12 @@ class ConcurrencyManager {
     const actualCbTotal = this.counterbidWorkers.reduce((sum, w) => sum + w.concurrency, 0);
     const actualMainTotal = this.mainWorkers.reduce((sum, w) => sum + w.concurrency, 0);
     const total = actualCbTotal + actualMainTotal;
-    const percentLoad = ((ratio * 100).toFixed(1));
+    const percentLoad = ((active / this.rateLimit) * 100).toFixed(1);
 
-    // Detailed debug logging for verification
-    infoLog(
-      'ConcurrencyAlloc',
-      `Active=${active}, CB=${actualCbTotal} (fixed, ${this.counterbidWorkers.length} workers), Main=${actualMainTotal} (dynamic, ${this.mainWorkers.length} workers), Total=${total} | Load=${percentLoad}% of RATE_LIMIT`
-    );
-
-    // Additional verification logs with formula details
-    debugLog(
-      'ConcurrencyAlloc',
-      `Formula verification | RATE_LIMIT=${this.rateLimit} | maxConcurrency=${MAX_CONCURRENCY} | clampedActive=${clampedActive} | ratio=${ratio.toFixed(4)} | mainFormula=max(${MIN}, round(${MAX_CONCURRENCY} * (1 - ${ratio.toFixed(4)}))) = ${mainConcurrency} (distributed across ${this.mainWorkers.length} workers)`
-    );
+    // Only log if active jobs changed by >10 (reduces log volume from 175K → ~5K entries)
+    if (Math.abs(active - this.lastLoggedActive) >= 10) {
+      this.lastLoggedActive = active;
+    }
   }
 
   /**
@@ -160,7 +147,6 @@ class ConcurrencyManager {
     const diff = Math.abs(actualJobCount - this.activeCounterbidJobs);
 
     // Log every reconciliation check for visibility
-    infoLog('ConcurrencyReconcile', `Check | expected=${this.activeCounterbidJobs}, actual=${actualJobCount}, diff=${diff}`);
 
     if (diff > 5) {
       warnLog(
@@ -199,4 +185,4 @@ class ConcurrencyManager {
 }
 
 // Singleton export with RATE_LIMIT from environment
-export const concurrencyManager = new ConcurrencyManager(Number(process.env.RATE_LIMIT || 8) * 1.5);
+export const concurrencyManager = new ConcurrencyManager(Number(process.env.RATE_LIMIT || 8));

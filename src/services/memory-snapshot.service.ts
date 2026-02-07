@@ -2,7 +2,7 @@ import Redis from 'ioredis';
 import { Queue, Worker } from 'bullmq';
 import mongoose from 'mongoose';
 import { MemorySnapshot, IMemorySnapshot } from '../models/memory-snapshot.model';
-import { debugLog, errorLog, infoLog, warnLog } from '../utils/debug-file-logger';
+import { errorLog, warnLog } from '../utils/debug-file-logger';
 
 // Import caches
 import { tokenTraitCache } from '../utils/token-trait-cache';
@@ -104,7 +104,6 @@ class MemorySnapshotService {
     if (deps) {
       this.deps = deps;
     }
-    infoLog('MemorySnapshotService', `Initialized with Redis and BullMQ queues | mainWorkers=${this.mainWorkers.length} | counterbidWorkers=${this.counterbidWorkers.length}`);
   }
 
   /**
@@ -116,7 +115,6 @@ class MemorySnapshotService {
     let errorCount = 0;
 
     try {
-      infoLog('MemorySnapshot', 'Starting memory snapshot collection');
 
       // Collect all metrics in parallel where possible
       const [
@@ -201,7 +199,6 @@ class MemorySnapshotService {
 
       await snapshot.save();
 
-      infoLog('MemorySnapshot', `Snapshot completed in ${snapshotDurationMs}ms | errors=${errorCount}`);
       return snapshot;
     } catch (error) {
       errorLog('MemorySnapshot', 'Failed to create snapshot', error);
@@ -494,7 +491,7 @@ class MemorySnapshotService {
         const stats = this.concurrencyManager.getStats();
         return {
           activeCounterbidJobs: stats.activeCounterbidJobs || 0,
-          totalConcurrency: stats.totalConcurrency || 150,
+          totalConcurrency: stats.totalConcurrency || Number(process.env.RATE_LIMIT || 8),
           currentAllocation: {
             counterbid: stats.currentAllocation?.counterbid || 0,
             main: stats.currentAllocation?.main || 0
@@ -504,7 +501,7 @@ class MemorySnapshotService {
 
       // Fallback if concurrency manager not available
       const RATE_LIMIT = Number(process.env.RATE_LIMIT || 8);
-      const maxConcurrency = RATE_LIMIT * 1.5;
+      const maxConcurrency = RATE_LIMIT;
       return {
         activeCounterbidJobs: 0,
         totalConcurrency: maxConcurrency,
@@ -516,7 +513,7 @@ class MemorySnapshotService {
     } catch (error) {
       errorLog('MemorySnapshot', 'Error collecting concurrency allocation', error);
       const RATE_LIMIT = Number(process.env.RATE_LIMIT || 8);
-      const maxConcurrency = RATE_LIMIT * 1.5;
+      const maxConcurrency = RATE_LIMIT;
       return {
         activeCounterbidJobs: 0,
         totalConcurrency: maxConcurrency,
@@ -554,7 +551,6 @@ class MemorySnapshotService {
       for (const collectionInfo of collections) {
         // Skip migrated collections
         if (excludedCollections.includes(collectionInfo.name)) {
-          debugLog('MemorySnapshot', `Skipping migrated collection: ${collectionInfo.name}`);
           continue;
         }
 
@@ -573,7 +569,6 @@ class MemorySnapshotService {
           });
         } catch (err) {
           // Skip collections we can't access
-          debugLog('MemorySnapshot', `Skipping collection ${collectionInfo.name}: ${err}`);
         }
       }
 
@@ -834,7 +829,6 @@ class MemorySnapshotService {
       });
 
       if (result.deletedCount > 0) {
-        infoLog('MemorySnapshot', `Cleaned up ${result.deletedCount} old snapshots`);
       }
 
       return result.deletedCount;

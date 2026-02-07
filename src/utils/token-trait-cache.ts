@@ -1,4 +1,4 @@
-import { debugLog, errorLog } from './debug-file-logger';
+import { errorLog } from './debug-file-logger';
 import { LRUCache } from 'lru-cache';
 
 // LRU Cache configuration (single-tier, no MongoDB)
@@ -42,11 +42,6 @@ const cacheStats: Omit<TokenTraitCacheStats, 'hitRate' | 'size' | 'maxSize'> = {
 setInterval(() => {
   if (cacheStats.totalRequests > 0) {
     const stats = getTokenTraitCacheStats();
-    debugLog('TokenTraitCache',
-      `[5min Stats] hits=${stats.hits} | misses=${stats.misses} | ` +
-      `hitRate=${stats.hitRate} | sets=${stats.sets} | ` +
-      `size=${stats.size}/${stats.maxSize}`
-    );
   }
 }, 300000); // 5 minutes
 
@@ -86,9 +81,6 @@ class TokenTraitCache {
       this.tokenTraitsLRU.set(key, normalizedData);
       cacheStats.sets++;
 
-      debugLog('TokenTraitCache',
-        `CACHE_SET | contract=${data.contractAddress.slice(0, 10)}... | tokenId=${data.tokenId} | traits=${data.traits.length}`
-      );
 
     } catch (error) {
       errorLog('Cache', `Failed to cache token traits | contract=${data.contractAddress} | tokenId=${data.tokenId}`, error);
@@ -113,9 +105,6 @@ class TokenTraitCache {
 
       // Cache miss - return null, let caller fetch from API
       cacheStats.misses++;
-      debugLog('TokenTraitCache',
-        `CACHE_MISS | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId}`
-      );
       return null;
 
     } catch (error) {

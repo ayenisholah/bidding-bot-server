@@ -8,7 +8,7 @@
  * - Thread-safe for concurrent operations
  */
 
-import { debugLog, infoLog, warnLog } from './debug-file-logger';
+import { warnLog } from './debug-file-logger';
 
 // Note: Using 'StopTracker' prefix to route logs to stoptask-YYYY-MM-DD.log
 // for easier correlation with stopTask debug logging
@@ -30,7 +30,6 @@ class CancellationTracker {
    */
   initializeTracking(taskId: string, totalBids: number, marketplace?: string): void {
     const key = this.getKey(taskId, marketplace);
-    infoLog('StopTracker', `INIT_TRACKING | taskId=${taskId} | totalBids=${totalBids} | marketplace=${marketplace || 'global'} | key=${key}`);
 
     this.trackingMap.set(key, {
       taskId,
@@ -40,21 +39,18 @@ class CancellationTracker {
       startTime: Date.now()
     });
 
-    infoLog('StopTracker', `INIT_TRACKING_DONE | key=${key} | mapSize=${this.trackingMap.size} | state={completed:0, total:${totalBids}}`);
   }
 
   /**
    * Set marketplace-specific totals for global cancellations
    */
   setMarketplaceTotals(taskId: string, marketplaceTotals: { opensea: number; magiceden: number; blur: number }): void {
-    infoLog('StopTracker', `SET_MP_TOTALS | taskId=${taskId} | opensea=${marketplaceTotals.opensea} | magiceden=${marketplaceTotals.magiceden} | blur=${marketplaceTotals.blur}`);
 
     Object.entries(marketplaceTotals).forEach(([marketplace, total]) => {
       const cacheKey = `${taskId}-${marketplace}-total`;
       this.marketplaceTotalsCache.set(cacheKey, total);
     });
 
-    infoLog('StopTracker', `SET_MP_TOTALS_DONE | taskId=${taskId} | cacheSize=${this.marketplaceTotalsCache.size}`);
   }
 
   /**
@@ -72,7 +68,6 @@ class CancellationTracker {
         const parentCacheKey = `${taskId}-${marketplace}-total`;
         const marketplaceTotalBids = this.marketplaceTotalsCache.get(parentCacheKey) || 0;
 
-        infoLog('StopTracker', `RECORD_AUTO_INIT | taskId=${taskId} | marketplace=${marketplace} | marketplaceKey=${marketplaceKey} | marketplaceTotalBids=${marketplaceTotalBids} | parentCacheKey=${parentCacheKey}`);
 
         this.trackingMap.set(marketplaceKey, {
           taskId,
@@ -82,7 +77,6 @@ class CancellationTracker {
           startTime: Date.now()
         });
 
-        infoLog('StopTracker', `RECORD_AUTO_INIT_DONE | marketplaceKey=${marketplaceKey} | mapSize=${this.trackingMap.size}`);
       }
     }
 
@@ -194,7 +188,6 @@ class CancellationTracker {
       const percentage = (totalCompleted / taskLevelTracking.totalBids) * 100;
       const result = Math.min(100, parseFloat(percentage.toFixed(2)));
 
-      infoLog('StopTracker', `GET_AGG_PCT_RESULT | taskId=${taskId} | completed=${totalCompleted} | total=${taskLevelTracking.totalBids} | result=${result}%`);
 
       return result;
     }
@@ -218,7 +211,6 @@ class CancellationTracker {
     const key = this.getKey(taskId, marketplace);
     const hadEntry = this.trackingMap.has(key);
 
-    infoLog('StopTracker', `CLEAR_TRACKING | taskId=${taskId} | marketplace=${marketplace || 'global'} | key=${key} | hadEntry=${hadEntry}`);
 
     this.trackingMap.delete(key);
 
@@ -245,7 +237,6 @@ class CancellationTracker {
         this.trackingMap.delete(trackingKey);
       });
 
-      infoLog('StopTracker', `CLEAR_TRACKING_CACHES | taskId=${taskId} | deletedCacheKeys=${deletedCacheKeys.join(',') || 'none'} | deletedTrackingKeys=${deletedTrackingKeys.join(',') || 'none'} | remainingMapSize=${this.trackingMap.size} | remainingCacheSize=${this.marketplaceTotalsCache.size}`);
     }
   }
 

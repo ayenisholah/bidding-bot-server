@@ -5,7 +5,7 @@
 
 import { LRUCache } from 'lru-cache';
 import { addIfNotExists } from './lru-helpers';
-import { warnLog, debugLog } from "./debug-file-logger";
+import { warnLog } from "./debug-file-logger";
 
 // Track logged balance errors to prevent flooding (1k items, 30 min TTL)
 const loggedBalanceErrors = new LRUCache<string, boolean>({

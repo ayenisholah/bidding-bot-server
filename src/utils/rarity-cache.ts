@@ -1,6 +1,4 @@
 import { LRUCache } from 'lru-cache';
-import { debugLog, infoLog } from './debug-file-logger';
-
 /**
  * LRU-based cache for rarity token data
  * Replaces MongoDB RarityCacheModel with pure LRU implementation
@@ -43,7 +41,6 @@ class RarityCache {
     const key = this.getKey(collectionSlug, rarityCategory);
     const data = this.cache.get(key);
     if (data) {
-      debugLog('RarityCache', `GET | key=${key} | tokenCount=${data.tokenIds.length}`);
     }
     return data || null;
   }
@@ -64,7 +61,6 @@ class RarityCache {
     };
 
     this.cache.set(key, data);
-    debugLog('RarityCache', `SET | key=${key} | tokenCount=${tokenIds.length}`);
   }
 
   /**
@@ -73,7 +69,6 @@ class RarityCache {
   async deleteRarityTokens(collectionSlug: string, rarityCategory: string): Promise<void> {
     const key = this.getKey(collectionSlug, rarityCategory);
     this.cache.delete(key);
-    debugLog('RarityCache', `DELETE | key=${key}`);
   }
 
   /**
@@ -91,7 +86,6 @@ class RarityCache {
     }
 
     if (deletedCount > 0) {
-      infoLog('RarityCache', `DELETE_COLLECTION | slug=${collectionSlug} | deletedKeys=${deletedCount}`);
     }
     return deletedCount;
   }

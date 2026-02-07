@@ -4,7 +4,7 @@
  */
 
 import Wallet from "../models/wallet.model";
-import { debugLog, errorLog } from "./debug-file-logger";
+import { errorLog } from "./debug-file-logger";
 
 const ourWalletAddresses = new Set<string>();
 
@@ -21,7 +21,6 @@ export async function loadOurWalletAddresses(): Promise<void> {
         ourWalletAddresses.add(w.address.toLowerCase());
       }
     });
-    debugLog('System', `Loaded ${ourWalletAddresses.size} wallet addresses for self-bid detection`);
   } catch (error) {
     errorLog('System', 'Failed to load wallet addresses', error);
   }

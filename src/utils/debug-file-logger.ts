@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const DEBUG = process.env.DEBUG === 'true';
 export const LOG_DIR = path.resolve(process.cwd(), 'debug-logs');
 
 // Ensure directory exists on module load and verify write permissions
@@ -739,35 +738,6 @@ export function getMarketplaceCategories(marketplace: string): LogCategory[] {
 // ============================================
 
 /**
- * Log a debug message to both console and file.
- * Only logs when DEBUG=true.
- * EXCEPTION: 'taskflow' category always logs (critical for debugging stuck tasks).
- * Routes to category-specific log file based on prefix.
- *
- * @param prefix - Log prefix category (e.g., 'TaskScheduler', 'BidFlow', 'STARTUP')
- * @param message - Log message content
- * @param metadata - Optional structured metadata for filtering (taskId, marketplace, slug, etc.)
- */
-export function debugLog(prefix: string, message: string, metadata?: LogMetadata): void {
-  // Always log taskflow category (critical for debugging stuck tasks)
-  const category = getCategoryForPrefix(prefix);
-  const isTaskflow = category === 'taskflow';
-
-  // Skip non-taskflow logs if DEBUG is off
-  if (!isTaskflow && !DEBUG) return;
-
-  const timestamp = new Date().toISOString();
-  const metaStr = formatMetadata(metadata);
-  const logLine = `[${timestamp}] [${prefix}] ${message}${metaStr}`;
-
-  // Console output
-  console.log(logLine);
-
-  // File output (append to category-specific file)
-  writeToFile(logLine, prefix);
-}
-
-/**
  * Log an error message to both console and file.
  * ALWAYS logs regardless of DEBUG flag (errors are always important).
  * Routes to category-specific log file based on prefix.
@@ -806,27 +776,6 @@ export function warnLog(prefix: string, message: string, metadata?: LogMetadata)
 
   // Console output (use console.warn for warnings)
   console.warn(logLine);
-
-  // File output (append to category-specific file)
-  writeToFile(logLine, prefix);
-}
-
-/**
- * Log an info message to both console and file.
- * ALWAYS logs regardless of DEBUG flag (for important status messages).
- * Routes to category-specific log file based on prefix.
- *
- * @param prefix - Log prefix category (e.g., 'WebSocket', 'STARTUP')
- * @param message - Info message content
- * @param metadata - Optional structured metadata for filtering (taskId, marketplace, slug, etc.)
- */
-export function infoLog(prefix: string, message: string, metadata?: LogMetadata): void {
-  const timestamp = new Date().toISOString();
-  const metaStr = formatMetadata(metadata);
-  const logLine = `[${timestamp}] [INFO][${prefix}] ${message}${metaStr}`;
-
-  // Console output
-  console.log(logLine);
 
   // File output (append to category-specific file)
   writeToFile(logLine, prefix);
@@ -889,69 +838,4 @@ export function sanitizeLogData(data: any, maxSize: number = 5000): any {
   }
 
   return cleaned;
-}
-
-/**
- * Performance timer for measuring function execution time.
- * Logs to timing-YYYY-MM-DD.log file.
- *
- * Usage:
- * const timer = startTimer('fetchItemOffers', { contractAddress, tokenId });
- * // ... do work ...
- * timer.end(); // Logs execution time
- */
-export function startTimer(functionName: string, metadata?: LogMetadata) {
-  const startTime = performance.now();
-
-  return {
-    end: (additionalMeta?: LogMetadata) => {
-      const duration = Math.round(performance.now() - startTime);
-
-      // Calculate response size if data object present
-      let responseSize = 0;
-      if (additionalMeta?.response || additionalMeta?.offers || additionalMeta?.payload) {
-        const dataObj = additionalMeta.response || additionalMeta.offers || additionalMeta.payload;
-        responseSize = JSON.stringify(dataObj).length;
-      }
-
-      const allMeta = {
-        ...metadata,
-        ...additionalMeta,
-        duration,
-        ...(responseSize > 0 && { responseSize })
-      };
-      infoLog('Timing', `[FUNC] ${functionName} | ${duration}ms`, allMeta);
-      return duration;
-    },
-    endAPI: (endpoint: string, additionalMeta?: LogMetadata) => {
-      const duration = Math.round(performance.now() - startTime);
-      const allMeta = { ...metadata, ...additionalMeta, duration, endpoint };
-      infoLog('TimingAPI', `[API] ${functionName} | ${endpoint} | ${duration}ms`, allMeta);
-      return duration;
-    }
-  };
-}
-
-/**
- * Async wrapper for timing async functions.
- *
- * Usage:
- * const result = await timeAsync('fetchItemOffers', metadata, async () => {
- *   return await fetchItemOffers(...);
- * });
- */
-export async function timeAsync<T>(
-  functionName: string,
-  metadata: LogMetadata,
-  fn: () => Promise<T>
-): Promise<T> {
-  const timer = startTimer(functionName, metadata);
-  try {
-    const result = await fn();
-    timer.end({ success: true });
-    return result;
-  } catch (error) {
-    timer.end({ success: false, error: error instanceof Error ? error.message : String(error) });
-    throw error;
-  }
 }

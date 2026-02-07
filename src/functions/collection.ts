@@ -9,7 +9,7 @@ import { BASE_URL } from "../constants";
 
 import { ICollectionDetails, ICollectionFee } from "../types/collection.types";
 import { setOpenseaMarketplaceFee } from "../utils/marketplace-fee-cache";
-import { errorLog, warnLog, debugLog } from "../utils/debug-file-logger";
+import { errorLog, warnLog} from "../utils/debug-file-logger";
 import { apiDedup } from "../utils/api-dedup";
 import { isCollectionUnavailable, markCollectionUnavailable } from "../utils/marketplace-availability";
 import {
@@ -187,7 +187,6 @@ export async function getCollectionDetails(slug: string, contractAddress?: strin
     collectionCache[slug] = result;
 
     const fetchTime = Date.now() - fetchStart;
-    debugLog('Performance', `[OS-CollDetails] API_FETCH | slug=${slug} | fetchTime=${fetchTime}ms`);
 
     return result;
   } catch (error) {
@@ -351,7 +350,6 @@ export async function getOpenseaFloor(collectionSlug: string) {
       }
 
       const fetchTime = Date.now() - fetchStart;
-      debugLog('Performance', `[OS-Floor] API_FETCH | slug=${collectionSlug} | floor=${floor_price} | attempt=${attempt} | fetchTime=${fetchTime}ms`);
 
       return floor_price;
 
@@ -753,7 +751,6 @@ async function fetchCollectionItemsRecursive(
     const updatedTokenIds = [...allTokenIds, ...tokenIds];
 
     // Log pagination progress with returned token count
-    debugLog('TokenFetch', `[OS] ${variables.collectionSlug} | Page ${pageNumber} | returned=${tokenIds.length} | total=${updatedTokenIds.length}${expectedCount ? ` | expected=${expectedCount}` : ''}`);
 
     // Update processing percentage if taskId is provided
     if (taskId) {
@@ -804,13 +801,11 @@ async function fetchCollectionItemsRecursive(
 
     // Log final token summary
     const duplicateCount = updatedTokenIds.length - uniqueTokenIds.length;
-    debugLog('TokenFetch', `[OS] ${variables.collectionSlug} | COMPLETE | unique=${uniqueTokenIds.length} | duplicates=${duplicateCount} | pages=${pageNumber}${taskId ? ` | taskId=${taskId}` : ''}`);
     if (duplicateCount > 0) {
       // Find which tokens were duplicates (only log first 20 to prevent flooding)
       const tokenCounts = new Map<string, number>();
       updatedTokenIds.forEach(t => tokenCounts.set(t, (tokenCounts.get(t) || 0) + 1));
       const dups = [...tokenCounts.entries()].filter(([_, c]) => c > 1).map(([t, c]) => `${t}(${c})`);
-      debugLog('TokenFetch', `[OS] ${variables.collectionSlug} | DUPLICATES: ${dups.slice(0, 20).join(', ')}${dups.length > 20 ? ` ...+${dups.length - 20} more` : ''}`);
     }
 
     return uniqueTokenIds;

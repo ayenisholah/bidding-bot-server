@@ -1,6 +1,4 @@
 import { LRUCache } from 'lru-cache';
-import { debugLog } from './debug-file-logger';
-
 export interface BidLogEntry {
   taskId: string;
   title: string;
@@ -58,7 +56,6 @@ class LogsCache {
   setTaskTTL(taskId: string, durationHours: number): void {
     const ttlMs = durationHours * 60 * 60 * 1000;
     this.taskTTLs.set(taskId, ttlMs);
-    debugLog('LogsCache', `Set TTL for task ${taskId}: ${durationHours}h (${ttlMs}ms)`);
   }
 
   /**
@@ -82,12 +79,10 @@ class LogsCache {
     const entry = this.bidLogsLRU.get(key);
     if (entry) {
       this.stats.hits++;
-      debugLog('LogsCache', `CACHE_HIT | ${key}`);
       return entry;
     }
 
     this.stats.misses++;
-    debugLog('LogsCache', `CACHE_MISS | ${key}`);
     return null;
   }
 
@@ -124,7 +119,6 @@ class LogsCache {
       const ttl = this.taskTTLs.get(taskId) || (24 * 60 * 60 * 1000);
       this.bidLogsLRU.set(key, existing, { ttl });
 
-      debugLog('LogsCache', `CACHE_UPDATE | ${key} | timestamp=${timestamp.toISOString()}`);
     }
   }
 
@@ -143,7 +137,6 @@ class LogsCache {
     }
 
     this.stats.deletes += deletedCount;
-    debugLog('LogsCache', `CACHE_DELETE_MANY | taskId=${taskId} | deleted=${deletedCount}`);
 
     // Remove task TTL mapping
     this.taskTTLs.delete(taskId);
@@ -167,7 +160,6 @@ class LogsCache {
     // Sort by timestamp descending (newest first)
     logs.sort((a, b) => b.timestamp.getTime() - a.timestamp.getTime());
 
-    debugLog('LogsCache', `CACHE_FIND | taskId=${taskId} | found=${logs.length}`);
 
     return logs;
   }
@@ -198,11 +190,6 @@ class LogsCache {
   private logStats(): void {
     if (this.stats.totalRequests > 0) {
       const stats = this.getStats();
-      debugLog('LogsCache',
-        `[5min Stats] hits=${stats.hits} | misses=${stats.misses} | ` +
-        `hitRate=${stats.hitRate} | sets=${stats.sets} | deletes=${stats.deletes} | ` +
-        `size=${stats.size}/${stats.maxSize}`
-      );
     }
   }
 

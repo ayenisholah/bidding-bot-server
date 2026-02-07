@@ -9,7 +9,7 @@
  * for static job IDs while still preventing duplicate API calls.
  */
 
-import { debugLog, warnLog } from './debug-file-logger';
+import { warnLog } from './debug-file-logger';
 
 // Track pending requests globally
 const pendingRequests = new Map<string, Promise<any>>();
@@ -62,7 +62,6 @@ export async function apiDedup<T>(
   if (pending) {
     stats.dedupedRequests++;
     if (debug) {
-      debugLog(category, `[Dedup] HIT | key=${key} | active=${pendingRequests.size} | saved=${stats.dedupedRequests}/${stats.totalRequests}`);
     }
     return pending;
   }
@@ -70,7 +69,6 @@ export async function apiDedup<T>(
   // No pending request - create new one
   stats.activeRequests++;
   if (debug) {
-    debugLog(category, `[Dedup] NEW | key=${key} | active=${pendingRequests.size + 1}`);
   }
 
   // Create timeout promise
@@ -84,7 +82,6 @@ export async function apiDedup<T>(
       pendingRequests.delete(key);
       stats.activeRequests--;
       if (debug) {
-        debugLog(category, `[Dedup] RESOLVED | key=${key}`);
       }
       return result;
     })

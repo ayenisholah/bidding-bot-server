@@ -4,7 +4,7 @@ import axiosRetry, { IAxiosRetryConfig } from "axios-retry";
 import { config } from "dotenv";
 import { RATE_LIMIT, rps } from ".";
 import { wrapAxiosInstance, jobContext } from "./utils/axios-wrapper";
-import { debugLog, infoLog, warnLog, errorLog } from "./utils/debug-file-logger";
+import { warnLog, errorLog } from "./utils/debug-file-logger";
 
 config()
 
@@ -111,9 +111,9 @@ async function initialize(rateLimit: number) {
     minTime: 1000 / concurrency, // Minimum time between job starts
     trackDoneStatus: true,
     // Reservoir system to maintain steady job flow and prevent queue drain
-    reservoir: rateLimit * 3, // Initial reservoir: 3x rate limit for buffer
-    reservoirRefreshAmount: rateLimit * 1.5, // Aggressive refill: 1.5x rate limit per second
-    reservoirRefreshInterval: 1000, // Refill every 1 second to maintain constant flow
+    // reservoir: rateLimit * 3, // Initial reservoir: 3x rate limit for buffer
+    // reservoirRefreshAmount: rateLimit * 1.5, // Aggressive refill: 1.5x rate limit per second
+    // reservoirRefreshInterval: 1000, // Refill every 1 second to maintain constant flow
   });
 
   axiosRetry(axiosInstance, retryConfig);
@@ -122,7 +122,6 @@ async function initialize(rateLimit: number) {
   wrapAxiosInstance(axiosInstance, () => jobContext.getJobId());
 
   // Limiter initialized
-  infoLog('Limiter', `INITIALIZED | concurrency=${concurrency} | queueMin=${QUEUE_MINIMUM} | queueTarget=${QUEUE_TARGET} | reservoir=${rateLimit * 3} | reservoirRefresh=${rateLimit * 1.5}/sec`);
 }
 
 // Add a function to get current counts
@@ -379,7 +378,6 @@ setInterval(() => {
   else {
     // Reset warning count when queue is healthy
     if ((lowQueueWarningCount > 0 || criticalQueueWarningCount > 0) && queueDepth >= QUEUE_TARGET) {
-      infoLog('LimiterQueue', `QUEUE_RECOVERED | depth=${queueDepth} | target=${QUEUE_TARGET} | status=${health.status} | previousLowWarnings=${lowQueueWarningCount} | previousCriticalWarnings=${criticalQueueWarningCount}`);
       lowQueueWarningCount = 0;
       criticalQueueWarningCount = 0;
     }
@@ -439,7 +437,6 @@ export async function scheduleWithAbort<T>(
 ): Promise<T> {
   // Early blacklist check before even queueing
   if (isTaskBlacklisted(taskId, marketplace)) {
-    debugLog('LimiterAbort', `BLACKLIST_REJECT | taskId=${taskId} | marketplace=${marketplace} | reason=task_blacklisted_before_queue`);
     throw new Error(`Task ${taskId} is blacklisted for ${marketplace}`);
   }
 
@@ -462,24 +459,17 @@ export async function scheduleWithAbort<T>(
     }
     pendingLimiterJobs.get(taskId)!.add(pendingJob);
 
-    const pendingCount = pendingLimiterJobs.get(taskId)?.size || 0;
-    debugLog('LimiterPending', `ADD | taskId=${taskId} | marketplace=${marketplace} | jobId=${actualJobId} | pendingCount=${pendingCount}`);
-
     limiter.schedule({ id: actualJobId }, async () => {
       // Remove from pending tracking since we're now executing
       pendingLimiterJobs.get(taskId)?.delete(pendingJob);
-      const remainingPending = pendingLimiterJobs.get(taskId)?.size || 0;
-      debugLog('LimiterPending', `EXECUTE | taskId=${taskId} | jobId=${actualJobId} | remainingPending=${remainingPending}`);
 
       // Check blacklist again after dequeue (task may have been stopped while waiting)
       if (isTaskBlacklisted(taskId, marketplace)) {
-        debugLog('LimiterAbort', `BLACKLIST_ABORT | taskId=${taskId} | marketplace=${marketplace} | jobId=${actualJobId} | reason=task_blacklisted_while_in_queue`);
         throw new Error(`Task ${taskId} aborted - blacklisted while in limiter queue`);
       }
 
       // Check if we were aborted while waiting in queue
       if (controller.signal.aborted) {
-        debugLog('LimiterAbort', `SIGNAL_ABORT | taskId=${taskId} | jobId=${actualJobId} | reason=abort_signal_triggered`);
         throw new Error(`Task ${taskId} aborted - signal triggered`);
       }
 
@@ -487,13 +477,11 @@ export async function scheduleWithAbort<T>(
       return fn(controller.signal);
     })
       .then((result) => {
-        debugLog('LimiterPending', `COMPLETE | taskId=${taskId} | jobId=${actualJobId} | result=success`);
         resolve(result);
       })
       .catch((err) => {
         // Clean up in case of error (may already be deleted if aborted)
         pendingLimiterJobs.get(taskId)?.delete(pendingJob);
-        debugLog('LimiterPending', `FAILED | taskId=${taskId} | jobId=${actualJobId} | error=${err.message}`);
         reject(err);
       });
   });
@@ -507,14 +495,11 @@ export async function scheduleWithAbort<T>(
  * @returns Number of jobs aborted
  */
 export function abortPendingLimiterJobs(taskId: string): number {
-  const startTime = Date.now();
   const pending = pendingLimiterJobs.get(taskId);
   if (!pending || pending.size === 0) {
-    debugLog('StopBlacklist', `LIMITER_ABORT_START | taskId=${taskId} | pendingJobCount=0`);
     return 0;
   }
 
-  infoLog('StopBlacklist', `LIMITER_ABORT_START | taskId=${taskId} | pendingJobCount=${pending.size} | timestamp=${startTime}`);
 
   let abortedCount = 0;
   const marketplaceCounts: Record<string, number> = {};
@@ -527,8 +512,6 @@ export function abortPendingLimiterJobs(taskId: string): number {
       // Reject the promise
       job.reject(new Error(`Task ${taskId} stopped - limiter job aborted`));
 
-      const waitedMs = Date.now() - job.queuedAt;
-      debugLog('StopBlacklist', `LIMITER_ABORT_JOB | taskId=${taskId} | marketplace=${job.marketplace} | jobId=${job.jobId} | waitedMs=${waitedMs}`);
       abortedCount++;
       marketplaceCounts[job.marketplace] = (marketplaceCounts[job.marketplace] || 0) + 1;
     } catch (err) {
@@ -538,10 +521,6 @@ export function abortPendingLimiterJobs(taskId: string): number {
 
   // Clear the set
   pendingLimiterJobs.delete(taskId);
-
-  const elapsedMs = Date.now() - startTime;
-  const mpBreakdown = Object.entries(marketplaceCounts).map(([mp, count]) => `${mp}=${count}`).join(', ');
-  infoLog('StopBlacklist', `LIMITER_ABORT_COMPLETE | taskId=${taskId} | abortedCount=${abortedCount} | byMarketplace={${mpBreakdown}} | elapsedMs=${elapsedMs}`);
   return abortedCount;
 }
 
@@ -567,31 +546,22 @@ export function getAllPendingLimiterJobs(): { taskId: string; count: number; mar
 }
 
 export function cancelTaskJobs(taskId: string, marketplace?: string) {
-  const startTime = Date.now();
-  infoLog('StopBlacklist', `BLACKLIST_ADD_START | taskId=${taskId} | marketplace=${marketplace || '*'} | timestamp=${startTime}`);
-
   if (!limiter) {
     warnLog('StopBlacklist', `BLACKLIST_NO_LIMITER | taskId=${taskId} | limiterNotInitialized=true`);
     return { cancelled: 0, blacklisted: false };
   }
 
-  // Check if already blacklisted
-  const wasAlreadyBlacklisted = isTaskBlacklisted(taskId, marketplace);
-
   // Add to blacklist to prevent new jobs
   if (!taskBlacklist.has(taskId)) {
     taskBlacklist.set(taskId, new Set());
-    debugLog('StopBlacklist', `BLACKLIST_CREATE_ENTRY | taskId=${taskId}`);
   }
 
   if (marketplace) {
     // Marketplace-specific blacklist
     taskBlacklist.get(taskId)!.add(marketplace.toLowerCase());
-    infoLog('StopBlacklist', `BLACKLIST_ADD_MP | taskId=${taskId} | marketplace=${marketplace.toLowerCase()} | wasAlreadyBlacklisted=${wasAlreadyBlacklisted}`);
   } else {
     // Full task blacklist - add special marker
     taskBlacklist.get(taskId)!.add('*');
-    infoLog('StopBlacklist', `BLACKLIST_ADD_FULL | taskId=${taskId} | marker=* | wasAlreadyBlacklisted=${wasAlreadyBlacklisted}`);
   }
 
   // Fix 5: Invalidate cache entries for this task to ensure immediate effect
@@ -606,42 +576,29 @@ export function cancelTaskJobs(taskId: string, marketplace?: string) {
   const counts = limiter.counts();
   const queuedJobs = counts.RECEIVED + counts.QUEUED;
 
-  const elapsedMs = Date.now() - startTime;
-  infoLog('StopBlacklist', `BLACKLIST_ADD_COMPLETE | taskId=${taskId} | marketplace=${marketplace || '*'} | queuedJobs=${queuedJobs} | limiterRunning=${counts.RUNNING} | elapsedMs=${elapsedMs}`);
-
   return { cancelled: 0, blacklisted: true, queuedJobs };
 }
 
 export function removeTaskFromBlacklist(taskId: string, marketplace?: string) {
-  const startTime = Date.now();
-  debugLog('StopBlacklist', `BLACKLIST_REMOVE_START | taskId=${taskId} | marketplace=${marketplace || '*'}`);
-
   const taskEntry = taskBlacklist.get(taskId);
   if (!taskEntry) {
-    debugLog('StopBlacklist', `BLACKLIST_REMOVE_NOT_FOUND | taskId=${taskId} | entryNotFound=true`);
     return false;
   }
 
-  const beforeSize = taskEntry.size;
-  const beforeMarketplaces = [...taskEntry].join(',');
   let wasRemoved = false;
 
   if (marketplace) {
     // Remove specific marketplace from blacklist
     wasRemoved = taskEntry.delete(marketplace.toLowerCase());
-    if (wasRemoved) {
-      infoLog('StopBlacklist', `BLACKLIST_REMOVE_MP | taskId=${taskId} | marketplace=${marketplace.toLowerCase()} | beforeSize=${beforeSize} | afterSize=${taskEntry.size}`);
-    }
+
     // Clean up empty entries
     if (taskEntry.size === 0) {
       taskBlacklist.delete(taskId);
-      debugLog('StopBlacklist', `BLACKLIST_REMOVE_CLEANUP | taskId=${taskId} | entryDeleted=true`);
     }
   } else {
     // Remove entire task from blacklist
     taskBlacklist.delete(taskId);
     wasRemoved = true;
-    infoLog('StopBlacklist', `BLACKLIST_REMOVE_FULL | taskId=${taskId} | removedMarketplaces=${beforeMarketplaces} | count=${beforeSize}`);
   }
 
   // Fix 5: Invalidate cache entries for this task to ensure immediate effect
@@ -650,9 +607,6 @@ export function removeTaskFromBlacklist(taskId: string, marketplace?: string) {
       blacklistCheckCache.delete(cacheKey);
     }
   }
-
-  const elapsedMs = Date.now() - startTime;
-  debugLog('StopBlacklist', `BLACKLIST_REMOVE_COMPLETE | taskId=${taskId} | wasRemoved=${wasRemoved} | elapsedMs=${elapsedMs}`);
 
   return wasRemoved;
 }
@@ -671,27 +625,21 @@ export function isTaskBlacklisted(taskId: string, marketplace?: string): boolean
   // Cache miss - perform actual check
   const taskEntry = taskBlacklist.get(taskId);
   let result: boolean;
-  let reason: string;
 
   if (!taskEntry) {
     result = false;
-    reason = 'no_entry';
   } else if (taskEntry.has('*')) {
     result = true;
-    reason = 'full_blacklist';
   } else if (marketplace) {
     result = taskEntry.has(marketplace.toLowerCase());
-    reason = 'mp_specific';
   } else {
     result = taskEntry.size > 0;
-    reason = 'any_mp_blacklisted';
   }
 
   // Cache the result
   blacklistCheckCache.set(cacheKey, { result, timestamp: now });
 
   // Only log cache misses (actual checks) to reduce log noise
-  debugLog('StopBlacklist', `BLACKLIST_CHECK | taskId=${taskId} | marketplace=${marketplace || '*'} | result=${result} | reason=${reason} | cached=false`);
 
   return result;
 }
@@ -699,7 +647,6 @@ export function isTaskBlacklisted(taskId: string, marketplace?: string): boolean
 // Enhanced limiter scheduling with task validation
 export function scheduleWithTaskValidation(fn: () => PromiseLike<any>, taskId: string) {
   if (isTaskBlacklisted(taskId)) {
-    debugLog('StopBlacklist', `SCHEDULE_BLOCKED | taskId=${taskId} | reason=task_blacklisted`);
     return Promise.reject(new Error(`Task ${taskId} is stopped`));
   }
   return limiter.schedule(fn);
