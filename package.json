@@ -19,7 +19,8 @@
 		"dc:build:beta-cluster": "DOCKER_BUILDKIT=1 docker buildx build --platform linux/arm64,linux/amd64 --cache-from type=registry,ref=nfttools/bidding-bot-server-beta-cluster:buildcache --cache-to type=registry,ref=nfttools/bidding-bot-server-beta-cluster:buildcache,mode=max -t nfttools/bidding-bot-server-beta-cluster:beta-cluster --push .",
 		"dc:push:beta-cluster": "docker push nfttools/bidding-bot-server-beta-cluster:beta-cluster",
 		"lint": "eslint 'src/**/*.{ts,tsx}'",
-		"lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix"
+		"lint:fix": "eslint 'src/**/*.{ts,tsx}' --fix",
+		"test:rate-pacing": "ts-node scripts/test-rate-pacing.ts"
 	},
 	"keywords": [],
 	"author": "",
@@ -45,7 +46,6 @@
 		"@types/papaparse": "5.3.16",
 		"archiver": "^7.0.1",
 		"axios": "^1.9.0",
-		"axios-retry": "^4.5.0",
 		"body-parser": "2.2.0",
 		"bottleneck": "^2.19.5",
 		"bullmq": "5.53.3",

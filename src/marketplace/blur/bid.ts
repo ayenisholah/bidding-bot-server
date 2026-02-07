@@ -598,7 +598,6 @@ async function formatBidOnBlur(
           data: JSON.stringify(buildPayload),
           signal: controller.signal,
           timeout: 60000,
-          "axios-retry": { retries: 3 } // Enable retries for transient errors (520/502/504)
         });
       });
 
@@ -760,7 +759,6 @@ async function submitBidToBlur(
               data: JSON.stringify(submitPayload),
               signal: controller.signal,
               timeout: 60000,
-              "axios-retry": { retries: 3 } // Enable retries for transient errors (520/502/504)
             });
           });
           break; // Success, exit retry loop

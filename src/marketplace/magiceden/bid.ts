@@ -463,7 +463,6 @@ async function createBidData(
             },
             signal: controller.signal,
             timeout: 60000,
-            "axios-retry": { retries: 3 }
           }
         );
       });
@@ -909,7 +908,6 @@ async function sendSignedOrderData(
               'x-api-key': API_KEY,
             },
             signal: controller.signal,
-            "axios-retry": { retries: 3 } // Enable retries for transient errors (520/502/504)
           }
         );
       });

@@ -1076,7 +1076,6 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
         },
         data: JSON.stringify(payload),
         signal: controller.signal,
-        "axios-retry": { retries: 3 }
       });
     });
     offer = response.data;
@@ -1413,7 +1412,6 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
           "Expires": "0",
         },
         signal: controller.signal,
-        "axios-retry": { retries: 3 },
       });
     })
 
