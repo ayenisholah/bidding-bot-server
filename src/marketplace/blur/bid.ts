@@ -240,11 +240,11 @@ export async function bidOnBlur(
       errorLog('API', `[Blur] Failed to get access token | taskId=${taskId} | wallet=${wallet_address.slice(0, 10)}... | slug=${slug}`, error);
       throw error;
     }
-    build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload, private_key);
+    build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload, private_key, source);
 
     let data = build?.signatures?.[0];
     if (!data) {
-      build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload, private_key);
+      build = await formatBidOnBlur(taskId, BLUR_API_URL, accessToken, wallet_address, buildPayload, private_key, source);
       data = build?.signatures?.[0];
     }
     if (!data) {
@@ -557,7 +557,8 @@ async function formatBidOnBlur(
   accessToken: string,
   walletAddress: string,
   buildPayload: any,
-  privateKey?: string
+  privateKey?: string,
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
   if (isTaskBlacklisted(taskId, 'blur')) {
@@ -580,7 +581,7 @@ async function formatBidOnBlur(
 
   while (retries <= maxRetries) {
     try {
-      const { data } = await limiter.schedule(async () => {
+      const { data } = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
         // Re-check blacklist AFTER waiting in limiter queue
         if (isTaskBlacklisted(taskId, 'blur')) {
           throw new Error('Task stopped while waiting in limiter queue');
@@ -688,7 +689,7 @@ async function submitBidToBlur(
   cancelPayload: any,
   expiry = 900,
   traits?: string,
-  _source: 'scheduled' | 'counterbid' = 'scheduled'
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   const [parsedTaskId] = bidCount.split(":");
 
@@ -741,7 +742,7 @@ async function submitBidToBlur(
 
       while (submitRetries <= maxSubmitRetries) {
         try {
-          response = await limiter.schedule(async () => {
+          response = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
             // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
             if (isTaskBlacklisted(parsedTaskId, 'blur')) {
               throw new Error('Task stopped while waiting in limiter queue');

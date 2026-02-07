@@ -81,7 +81,6 @@ class MemorySnapshotService {
   private counterbidQueue: Queue | null = null;
   private mainWorkers: Worker[] = [];
   private counterbidWorkers: Worker[] = [];
-  private concurrencyManager: any = null;
   private deps: MemorySnapshotDependencies | null = null;
 
   public initialize(
@@ -91,8 +90,7 @@ class MemorySnapshotService {
     deps?: MemorySnapshotDependencies,
     counterbidQueue?: Queue,
     mainWorkers?: Worker[],
-    counterbidWorkers?: Worker[],
-    concurrencyManager?: any
+    counterbidWorkers?: Worker[]
   ): void {
     this.redis = redis;
     this.mainQueue = mainQueue;
@@ -100,7 +98,6 @@ class MemorySnapshotService {
     this.counterbidQueue = counterbidQueue || null;
     this.mainWorkers = mainWorkers || [];
     this.counterbidWorkers = counterbidWorkers || [];
-    this.concurrencyManager = concurrencyManager || null;
     if (deps) {
       this.deps = deps;
     }
@@ -483,43 +480,29 @@ class MemorySnapshotService {
   }
 
   /**
-   * Collect concurrency allocation statistics from concurrency manager
+   * Collect concurrency allocation statistics from workers directly
    */
   private collectConcurrencyAllocation() {
     try {
-      if (this.concurrencyManager) {
-        const stats = this.concurrencyManager.getStats();
-        return {
-          activeCounterbidJobs: stats.activeCounterbidJobs || 0,
-          totalConcurrency: stats.totalConcurrency || Number(process.env.RATE_LIMIT || 8),
-          currentAllocation: {
-            counterbid: stats.currentAllocation?.counterbid || 0,
-            main: stats.currentAllocation?.main || 0
-          }
-        };
-      }
-
-      // Fallback if concurrency manager not available
-      const RATE_LIMIT = Number(process.env.RATE_LIMIT || 8);
-      const maxConcurrency = RATE_LIMIT;
+      const mainConcurrency = this.mainWorkers.reduce((sum, w) => sum + w.concurrency, 0);
+      const counterbidConcurrency = this.counterbidWorkers.reduce((sum, w) => sum + w.concurrency, 0);
       return {
         activeCounterbidJobs: 0,
-        totalConcurrency: maxConcurrency,
+        totalConcurrency: mainConcurrency + counterbidConcurrency,
         currentAllocation: {
-          counterbid: maxConcurrency,
-          main: maxConcurrency
+          counterbid: counterbidConcurrency,
+          main: mainConcurrency
         }
       };
     } catch (error) {
       errorLog('MemorySnapshot', 'Error collecting concurrency allocation', error);
       const RATE_LIMIT = Number(process.env.RATE_LIMIT || 8);
-      const maxConcurrency = RATE_LIMIT;
       return {
         activeCounterbidJobs: 0,
-        totalConcurrency: maxConcurrency,
+        totalConcurrency: RATE_LIMIT * 10,
         currentAllocation: {
-          counterbid: maxConcurrency,
-          main: maxConcurrency
+          counterbid: RATE_LIMIT * 5,
+          main: RATE_LIMIT * 5
         }
       };
     }

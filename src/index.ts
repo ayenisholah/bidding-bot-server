@@ -28,7 +28,7 @@ import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
 import os from 'os';
-import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlacklisted, getLimiterQueueDetails, cancelTaskJobs, abortPendingLimiterJobs, getQueueHealth } from "./init";
+import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlacklisted, getLimiterQueueDetails, cancelTaskJobs, getQueueHealth } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrderWithoutTracking, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor, resolveContractAddress } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics, transferRestrictedCollections, authMetrics, timeoutMetrics } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
@@ -94,7 +94,7 @@ import { memoryCleanupService } from "./services/memory-cleanup.service";
 import { collectionDataWarmer } from "./services/collection-data-warmer.service";
 import { recordForwarding, getForwardingStats, initForwardingLatencyTracker, shutdownForwardingLatencyTracker } from "./services/forwarding-latency-tracker";
 import { recordExecution as recordCounterbidExecution, getAllExecutionStats, initExecutionLatencyTracker, shutdownExecutionLatencyTracker } from "./services/execution-latency-tracker";
-import { concurrencyManager } from "./services/concurrency-manager";
+
 import { startPeriodicSnapshots, stopPeriodicSnapshots, captureLatencySnapshot } from "./services/latency-snapshot.service";
 import { LatencySnapshot } from "./models/latency-snapshot.model";
 
@@ -2192,8 +2192,11 @@ async function startServer() {
     initializeQueueEventHandlers();
 
 
-    // Multi-worker architecture: Each worker gets full RATE_LIMIT concurrency
-    const concurrency = Number(RATE_LIMIT);
+    // Multi-worker architecture: Each worker gets 5x RATE_LIMIT concurrency
+    // BullMQ concurrency only controls parallelism (how many jobs run concurrently).
+    // The Bottleneck rate limiter enforces the actual API rate (RPS).
+    // 5x headroom ensures the Bottleneck queue stays fed even with high API latency.
+    const concurrency = Number(RATE_LIMIT) * 5;
     const NUM_MAIN_WORKERS = 2;
     const NUM_COUNTERBID_WORKERS = 2;
 
@@ -2583,37 +2586,10 @@ async function startServer() {
       counterbidWorkers.push(worker);
     }
 
-    // Initialize concurrency manager with worker arrays
-    concurrencyManager.setWorkers(mainWorkers, counterbidWorkers);
-
-    // Hook into counterbid queue events for real-time counter updates
-    // NOTE: increment is called directly at job creation sites (more reliable than 'waiting' event)
-    // Keep 'completed' and 'failed' handlers for decrement (they work more reliably)
-
-    counterbidQueueEvents.on('completed', ({ jobId }) => {
-      concurrencyManager.decrementCounterbid(); // Instant -1, immediate reallocation
-    });
-
-    counterbidQueueEvents.on('failed', ({ jobId }) => {
-      concurrencyManager.decrementCounterbid(); // Instant -1, immediate reallocation
-    });
-
-    // Periodic reconciliation (safety net for race conditions, every 5 seconds)
-    setInterval(async () => {
-      try {
-        const counts = await counterbidQueue.getJobCounts();
-        const actual = counts.waiting + counts.active;
-        await concurrencyManager.reconcile(actual);
-      } catch (error) {
-        errorLog('ConcurrencyManager', 'Failed to reconcile counterbid job count', error);
-      }
-    }, 5000);
-
-    const minMain = Math.floor(RATE_LIMIT / 4);
 
     // Additional startup verification log
 
-    // Update memory snapshot service with worker and concurrency manager references
+    // Update memory snapshot service with worker references
     // Note: Redis param kept for backwards compatibility but not used (Redis is BullMQ-only)
     memorySnapshotService.initialize(
       null as any,
@@ -2637,8 +2613,7 @@ async function startServer() {
       },
       counterbidQueue,
       mainWorkers,
-      counterbidWorkers,
-      concurrencyManager
+      counterbidWorkers
     );
 
     // Initialize worker health monitoring
@@ -9433,11 +9408,7 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string, stopp
     // 1. Blacklist task immediately to prevent new jobs from being queued
     cancelTaskJobs(taskId, marketplace);
 
-    // 2. Abort jobs pending in Bottleneck rate limiter queue
-    const limiterAbortStart = Date.now();
-    const limiterAborted = abortPendingLimiterJobs(taskId);
-
-    // 3. Abort in-flight HTTP requests for all marketplaces in parallel
+    // 2. Abort in-flight HTTP requests for all marketplaces in parallel
     const httpAbortStart = Date.now();
     const [osAborted, meAborted, blurAborted] = await Promise.all([
       cancelOpenseaRequest(taskId),
@@ -9528,9 +9499,6 @@ async function stopTask(task: ITask, start: boolean, marketplace?: string, stopp
 
     // Step 2: Cancel active jobs and remove from queue (most important)
     const queueResult = await removeAllTaskJobsFromQueue(taskId, marketplace);
-    if (queueResult.counterbidRemoved > 0) {
-      concurrencyManager.decrementCounterbidBy(queueResult.counterbidRemoved);
-    }
     cancellationDebugLogger.log('JOB_CANCEL', `Removed ${queueResult.removed} jobs from queue`, {
       jobsRemoved: queueResult.removed
     });
@@ -12750,7 +12718,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
               removeOnFail: true
             }
           );
-          concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+
         }
       } catch (error: any) {
         errorLog('Queue', `Failed to process MagicEden token counterbid`, error);
@@ -12896,7 +12864,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 removeOnComplete: true,
                 removeOnFail: true
               });
-              concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+    
             }
           } catch (queueError: any) {
             errorLog('Queue', `Failed to process MagicEden trait counterbid`, queueError);
@@ -12998,7 +12966,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                     removeOnFail: true
                   }
                 );
-                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+      
                 tokenCounterbidsQueued++;
               }
             } catch (queueError: any) {
@@ -13183,7 +13151,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 removeOnComplete: true,
                 removeOnFail: true
               });
-              concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+    
               counterbidsQueued++;
               ordersToCancel.push(order);
             } catch (queueError: any) {
@@ -13240,7 +13208,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                     removeOnFail: true
                   }
                 );
-                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+      
                 counterbidsQueued++;
                 ordersToCancel.push(order);
               }
@@ -13299,7 +13267,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                     removeOnFail: true
                   }
                 );
-                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+      
                 counterbidsQueued++;
                 ordersToCancel.push(order);
               }
@@ -13396,7 +13364,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 removeOnComplete: true,
                 removeOnFail: true
               });
-              concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+    
               tokenCollectionCounterbidsQueued++;
             } catch (queueError: any) {
               // Ignore duplicate job errors - this is expected with deterministic jobIds
@@ -13894,7 +13862,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
               removeOnFail: true
             }
           );
-          concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+
         }
       }).catch((error: any) => {
         errorLog('Queue', `Failed to process OpenSea token counterbid`, error);
@@ -14128,7 +14096,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                       removeOnFail: true
                     }
                   );
-                  concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+        
                   tokenCounterbidsQueued++;
                 }
               }).catch((queueError: any) => {
@@ -14193,7 +14161,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                   removeOnFail: true
                 }
               );
-              concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+    
             }
           } catch (queueError: any) {
             errorLog('Queue', `Failed to process OpenSea trait counterbid`, queueError);
@@ -14322,7 +14290,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                 removeOnComplete: true,
                 removeOnFail: true
               }).then(() => {
-                concurrencyManager.incrementCounterbid();
+
                 tokenTraitCounterbidsQueued++;
               }).catch((queueError: any) => {
                 if (queueError?.message?.includes('Job with this id already exists')) {
@@ -14528,7 +14496,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                   removeOnFail: true
                 }
               );
-              concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+    
               counterbidsQueued++;
             } catch (queueError: any) {
               if (!queueError?.message?.includes('Job with this id already exists')) {
@@ -14588,7 +14556,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                     removeOnFail: true
                   }
                 );
-                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+      
                 counterbidsQueued++;
               }
             } catch (queueError: any) {
@@ -14647,7 +14615,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                     removeOnFail: true
                   }
                 );
-                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+      
                 counterbidsQueued++;
               }
             } catch (queueError: any) {
@@ -14782,7 +14750,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                 removeOnComplete: true,
                 removeOnFail: true
               }).then(() => {
-                concurrencyManager.incrementCounterbid();
+
                 tokenCollectionCounterbidsQueued++;
               }).catch((queueError: any) => {
                 if (queueError?.message?.includes('Job with this id already exists')) {
@@ -15011,7 +14979,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
               removeOnComplete: true,
               removeOnFail: true
             });
-            concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+  
           }
         } catch (queueError: any) {
           errorLog('Queue', `Failed to process Blur trait counterbid`, queueError);
@@ -15211,7 +15179,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
                   removeOnComplete: true,
                   removeOnFail: true
                 });
-                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+      
                 counterbidsQueued++;
               }
             } catch (queueError: any) {
@@ -15261,7 +15229,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
                   removeOnComplete: true,
                   removeOnFail: true
                 });
-                concurrencyManager.incrementCounterbid(); // Direct increment for reliable tracking
+      
                 counterbidsQueued++;
               }
             } catch (queueError: any) {
@@ -21301,7 +21269,11 @@ app.get("/metrics", async (req, res) => {
           completed: (mainQueueCounts.completed || 0) + (counterbidQueueCounts.completed || 0),
           failed: (mainQueueCounts.failed || 0) + (counterbidQueueCounts.failed || 0)
         },
-        concurrencyAllocation: concurrencyManager.getStats(),
+        concurrencyAllocation: {
+            main: mainWorkers.reduce((sum, w) => sum + w.concurrency, 0),
+            counterbid: counterbidWorkers.reduce((sum, w) => sum + w.concurrency, 0),
+            total: mainWorkers.reduce((sum, w) => sum + w.concurrency, 0) + counterbidWorkers.reduce((sum, w) => sum + w.concurrency, 0),
+          },
         thresholds: {
           currentDepth: (mainQueueCounts.waiting || 0),
           maxThreshold: MAX_QUEUE_JOBS,

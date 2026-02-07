@@ -746,7 +746,7 @@ export async function bidOnOpensea(
           return
         }
 
-        const itemResponse = await postItemOffer(taskId, offer, itemSignature, slug)
+        const itemResponse = await postItemOffer(taskId, offer, itemSignature, slug, source)
         const itemOrderHash = itemResponse?.order?.order_hash
 
         const sanitizedExpiry = expiry > 900 ? expiry : 900
@@ -900,7 +900,7 @@ export async function bidOnOpensea(
           return
         }
 
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
+        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, source)
       }
 
       else {
@@ -1022,7 +1022,7 @@ export async function bidOnOpensea(
         if (isTaskBlacklisted(taskId, 'opensea') || !task || !task.running || !task.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("opensea")) {
           return
         }
-        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry)
+        await submitOfferToOpensea(decimal, currencySymbol, bidCount, offerPrice.toString(), payload, expiry, source)
       }
 
     } catch (error) {
@@ -1039,7 +1039,7 @@ export async function bidOnOpensea(
  * Posts an offer to OpenSea.
  * @param payload - The payload of the offer.
  */
-async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
+async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900, source: 'scheduled' | 'counterbid' = 'scheduled') {
   const [taskId] = bidCount.split(":")
   const bidStartTime = Date.now();
 
@@ -1058,7 +1058,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
 
   let offer: OpenseaOffer;
   try {
-    const response = await limiter.schedule(async () => {
+    const response = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
       // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
       if (isTaskBlacklisted(taskId, 'opensea')) {
         throw new Error('Task stopped while waiting in limiter queue');
@@ -1353,7 +1353,7 @@ async function fetchMakerOfferForToken(
   }
 }
 
-async function postItemOffer(taskId: string, offer: unknown, signature: string, slug?: string) {
+async function postItemOffer(taskId: string, offer: unknown, signature: string, slug?: string, source: 'scheduled' | 'counterbid' = 'scheduled') {
   // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
   if (isTaskBlacklisted(taskId, 'opensea')) {
     return null;
@@ -1397,7 +1397,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
   // Log request payload for debugging
 
   try {
-    const { data } = await limiter.schedule(async () => {
+    const { data } = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
       // Re-check blacklist AFTER waiting in limiter queue - critical fix for in-flight token bids
       if (isTaskBlacklisted(taskId, 'opensea')) {
         throw new Error('Task stopped while waiting in limiter queue');

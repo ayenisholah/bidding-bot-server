@@ -335,7 +335,8 @@ export async function bidOnMagiceden(
         expiration.toString(),
         currency,
         trait,
-        tokenId
+        tokenId,
+        source
       );
     } else {
       order = generateMagicEdenOrder(
@@ -399,7 +400,8 @@ async function createBidData(
   expirationTime: string,
   currency = WETH,
   trait?: Trait,
-  tokenId?: number | string
+  tokenId?: number | string,
+  source: 'scheduled' | 'counterbid' = 'scheduled'
 ): Promise<any> {
   const orderKind = trait || tokenId ? "seaport-v1.6" : "payment-processor-v2";
   // Build options based on bid type
@@ -447,7 +449,7 @@ async function createBidData(
     const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
-      const { data: order } = await limiter.schedule(async () => {
+      const { data: order } = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
         // Re-check blacklist AFTER waiting in limiter queue
         if (isTaskBlacklisted(taskId, 'magiceden')) {
           throw new Error('Task stopped while waiting in limiter queue');
@@ -893,7 +895,7 @@ async function sendSignedOrderData(
       // For collection offers (v4), signature is in the payload, not in query params
       url = (!trait && !tokenId) ? endpoint : `${endpoint}?signature=${encodeURIComponent(signature)}`;
 
-      const { data: offerResponse } = await limiter.schedule(async () => {
+      const { data: offerResponse } = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
         // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
         if (isTaskBlacklisted(taskId, 'magiceden')) {
           throw new Error('Task stopped while waiting in limiter queue');
