@@ -2,7 +2,7 @@ name: Docker Build and Push (Beta Single)
 
 on:
   push:
-    branches: ["beta-single"]
+    branches: ["beta-redis-single"]
 
 jobs:
   build:
