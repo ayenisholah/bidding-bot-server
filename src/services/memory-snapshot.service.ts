@@ -78,9 +78,7 @@ class MemorySnapshotService {
   private redis: Redis | null = null;
   private mainQueue: Queue | null = null;
   private blurQueue: Queue | null = null;
-  private counterbidQueue: Queue | null = null;
-  private mainWorkers: Worker[] = [];
-  private counterbidWorkers: Worker[] = [];
+  private workers: Worker[] = [];
   private deps: MemorySnapshotDependencies | null = null;
 
   public initialize(
@@ -88,16 +86,12 @@ class MemorySnapshotService {
     mainQueue: Queue,
     blurQueue: Queue | null,
     deps?: MemorySnapshotDependencies,
-    counterbidQueue?: Queue,
-    mainWorkers?: Worker[],
-    counterbidWorkers?: Worker[]
+    workers?: Worker[]
   ): void {
     this.redis = redis;
     this.mainQueue = mainQueue;
     this.blurQueue = blurQueue;
-    this.counterbidQueue = counterbidQueue || null;
-    this.mainWorkers = mainWorkers || [];
-    this.counterbidWorkers = counterbidWorkers || [];
+    this.workers = workers || [];
     if (deps) {
       this.deps = deps;
     }
@@ -182,9 +176,8 @@ class MemorySnapshotService {
 
       const snapshotDurationMs = Date.now() - startTime;
 
-      // Collect worker and concurrency stats
+      // Collect worker stats
       const workers = this.collectWorkerStats();
-      const concurrencyAllocation = this.collectConcurrencyAllocation();
 
       const snapshot = new MemorySnapshot({
         timestamp: new Date(),
@@ -200,7 +193,6 @@ class MemorySnapshotService {
         v8HeapStats,
         systemResources,
         workers,
-        concurrencyAllocation,
         metadata: {
           snapshotDurationMs,
           errorCount,
@@ -395,7 +387,7 @@ class MemorySnapshotService {
         }
       };
 
-      // If blur queue exists, include its stats (for backwards compatibility)
+      // If blur queue exists, include its stats (optional)
       if (this.blurQueue) {
         const blurCounts = await this.blurQueue.getJobCounts();
         result.blur = {
@@ -404,34 +396,6 @@ class MemorySnapshotService {
           completed: blurCounts.completed || 0,
           failed: blurCounts.failed || 0,
           delayed: blurCounts.delayed || 0
-        };
-      } else {
-        result.blur = {
-          waiting: 0,
-          active: 0,
-          completed: 0,
-          failed: 0,
-          delayed: 0
-        };
-      }
-
-      // Add counterbid queue stats
-      if (this.counterbidQueue) {
-        const counterbidCounts = await this.counterbidQueue.getJobCounts();
-        result.counterbid = {
-          waiting: counterbidCounts.waiting || 0,
-          active: counterbidCounts.active || 0,
-          completed: counterbidCounts.completed || 0,
-          failed: counterbidCounts.failed || 0,
-          delayed: counterbidCounts.delayed || 0
-        };
-      } else {
-        result.counterbid = {
-          waiting: 0,
-          active: 0,
-          completed: 0,
-          failed: 0,
-          delayed: 0
         };
       }
 
@@ -443,81 +407,25 @@ class MemorySnapshotService {
   }
 
   /**
-   * Collect worker concurrency statistics
+   * Collect worker statistics (unified format)
    * Returns aggregated stats in schema-compatible format
    */
   private collectWorkerStats() {
     try {
-      // Collect per-worker stats
-      const mainWorkerStats = this.mainWorkers.map((worker, index) => ({
-        index,
-        concurrency: worker.concurrency,
-        running: worker.isRunning(),
-        paused: worker.isPaused()
-      }));
+      const totalConcurrency = this.workers.reduce((sum, w) => sum + w.concurrency, 0);
+      const allRunning = this.workers.every(w => w.isRunning());
 
-      const counterbidWorkerStats = this.counterbidWorkers.map((worker, index) => ({
-        index,
-        concurrency: worker.concurrency,
-        running: worker.isRunning(),
-        paused: worker.isPaused()
-      }));
-
-      // Aggregate totals
-      const mainConcurrency = mainWorkerStats.reduce((sum, w) => sum + w.concurrency, 0);
-      const counterbidConcurrency = counterbidWorkerStats.reduce((sum, w) => sum + w.concurrency, 0);
-
-      // Check if all workers are running (healthy)
-      const allMainRunning = mainWorkerStats.every(w => w.running);
-      const allCounterbidRunning = counterbidWorkerStats.every(w => w.running);
-
-      // Return in schema-compatible format (aggregated, not arrays)
       return {
-        main: {
-          concurrency: mainConcurrency,
-          running: allMainRunning
-        },
-        counterbid: {
-          concurrency: counterbidConcurrency,
-          running: allCounterbidRunning
-        },
-        totalConcurrency: mainConcurrency + counterbidConcurrency
+        totalConcurrency,
+        workerCount: this.workers.length,
+        running: allRunning
       };
     } catch (error) {
       errorLog('MemorySnapshot', 'Error collecting worker stats', error);
       return {
-        main: { concurrency: 0, running: false },
-        counterbid: { concurrency: 0, running: false },
-        totalConcurrency: 0
-      };
-    }
-  }
-
-  /**
-   * Collect concurrency allocation statistics from workers directly
-   */
-  private collectConcurrencyAllocation() {
-    try {
-      const mainConcurrency = this.mainWorkers.reduce((sum, w) => sum + w.concurrency, 0);
-      const counterbidConcurrency = this.counterbidWorkers.reduce((sum, w) => sum + w.concurrency, 0);
-      return {
-        activeCounterbidJobs: 0,
-        totalConcurrency: mainConcurrency + counterbidConcurrency,
-        currentAllocation: {
-          counterbid: counterbidConcurrency,
-          main: mainConcurrency
-        }
-      };
-    } catch (error) {
-      errorLog('MemorySnapshot', 'Error collecting concurrency allocation', error);
-      const RATE_LIMIT = Number(process.env.RATE_LIMIT || 8);
-      return {
-        activeCounterbidJobs: 0,
-        totalConcurrency: RATE_LIMIT * 10,
-        currentAllocation: {
-          counterbid: RATE_LIMIT * 5,
-          main: RATE_LIMIT * 5
-        }
+        totalConcurrency: 0,
+        workerCount: 0,
+        running: false
       };
     }
   }
@@ -1021,9 +929,7 @@ class MemorySnapshotService {
 
   private getEmptyQueueStats() {
     return {
-      main: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 },
-      blur: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 },
-      counterbid: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 }
+      main: { waiting: 0, active: 0, completed: 0, failed: 0, delayed: 0 }
     };
   }
 

@@ -193,25 +193,14 @@ export interface IMemorySnapshot extends Document {
   // BullMQ queues
   queues: {
     main: { waiting: number; active: number; completed: number; failed: number; delayed: number };
-    blur: { waiting: number; active: number; completed: number; failed: number; delayed: number };
-    counterbid: { waiting: number; active: number; completed: number; failed: number; delayed: number };
+    blur?: { waiting: number; active: number; completed: number; failed: number; delayed: number };
   };
 
-  // Worker concurrency allocation
+  // Worker stats (unified architecture)
   workers: {
-    main: { concurrency: number; running: boolean };
-    counterbid: { concurrency: number; running: boolean };
     totalConcurrency: number;
-  };
-
-  // Concurrency allocation stats
-  concurrencyAllocation: {
-    activeCounterbidJobs: number;
-    totalConcurrency: number;
-    currentAllocation: {
-      counterbid: number;
-      main: number;
-    };
+    workerCount: number;
+    running: boolean;
   };
 
   // MongoDB collections
@@ -452,40 +441,18 @@ const MemorySnapshotSchema = new Schema<IMemorySnapshot>(
         delayed: { type: Number, required: true }
       },
       blur: {
-        waiting: { type: Number, required: true },
-        active: { type: Number, required: true },
-        completed: { type: Number, required: true },
-        failed: { type: Number, required: true },
-        delayed: { type: Number, required: true }
-      },
-      counterbid: {
-        waiting: { type: Number, required: true },
-        active: { type: Number, required: true },
-        completed: { type: Number, required: true },
-        failed: { type: Number, required: true },
-        delayed: { type: Number, required: true }
+        waiting: { type: Number, required: false },
+        active: { type: Number, required: false },
+        completed: { type: Number, required: false },
+        failed: { type: Number, required: false },
+        delayed: { type: Number, required: false }
       }
     },
 
     workers: {
-      main: {
-        concurrency: { type: Number, required: true },
-        running: { type: Boolean, required: true }
-      },
-      counterbid: {
-        concurrency: { type: Number, required: true },
-        running: { type: Boolean, required: true }
-      },
-      totalConcurrency: { type: Number, required: true }
-    },
-
-    concurrencyAllocation: {
-      activeCounterbidJobs: { type: Number, required: true },
       totalConcurrency: { type: Number, required: true },
-      currentAllocation: {
-        counterbid: { type: Number, required: true },
-        main: { type: Number, required: true }
-      }
+      workerCount: { type: Number, required: true },
+      running: { type: Boolean, required: true }
     },
 
     mongoCollections: [MongoCollectionStatsSchema],
