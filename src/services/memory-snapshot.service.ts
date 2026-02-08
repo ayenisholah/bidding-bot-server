@@ -1,7 +1,6 @@
 import Redis from 'ioredis';
 import { Queue, Worker } from 'bullmq';
 import mongoose from 'mongoose';
-import * as v8 from 'v8';
 import { MemorySnapshot, IMemorySnapshot } from '../models/memory-snapshot.model';
 import { errorLog, warnLog } from '../utils/debug-file-logger';
 
@@ -82,7 +81,6 @@ class MemorySnapshotService {
   private counterbidQueue: Queue | null = null;
   private mainWorkers: Worker[] = [];
   private counterbidWorkers: Worker[] = [];
-  private concurrencyManager: any = null;
   private deps: MemorySnapshotDependencies | null = null;
 
   public initialize(
@@ -90,15 +88,16 @@ class MemorySnapshotService {
     mainQueue: Queue,
     blurQueue: Queue | null,
     deps?: MemorySnapshotDependencies,
-    workers?: Worker[]
+    counterbidQueue?: Queue,
+    mainWorkers?: Worker[],
+    counterbidWorkers?: Worker[]
   ): void {
     this.redis = redis;
     this.mainQueue = mainQueue;
     this.blurQueue = blurQueue;
-    this.counterbidQueue = null; // No longer used with single queue
-    this.mainWorkers = workers || [];
-    this.counterbidWorkers = []; // No longer used with single queue
-    this.concurrencyManager = null; // No longer used with single queue
+    this.counterbidQueue = counterbidQueue || null;
+    this.mainWorkers = mainWorkers || [];
+    this.counterbidWorkers = counterbidWorkers || [];
     if (deps) {
       this.deps = deps;
     }
@@ -124,9 +123,7 @@ class MemorySnapshotService {
         mongoCollections,
         memoryCleanup,
         lruCaches,
-        unboundedDataStructures,
-        v8HeapStats,
-        systemResources
+        unboundedDataStructures
       ] = await Promise.all([
         Promise.resolve(this.collectProcessMemory()),
         this.collectRedisMemory().catch((err: Error) => {
@@ -168,9 +165,7 @@ class MemorySnapshotService {
           errorCount++;
           errors.push(`UnboundedDataStructures: ${err.message}`);
           return this.getEmptyUnboundedDataStructuresStats();
-        }),
-        Promise.resolve(this.collectV8HeapStats()),
-        Promise.resolve(this.collectSystemResources())
+        })
       ]);
 
       const snapshotDurationMs = Date.now() - startTime;
@@ -182,8 +177,6 @@ class MemorySnapshotService {
       const snapshot = new MemorySnapshot({
         timestamp: new Date(),
         processMemory,
-        v8HeapStats,
-        systemResources,
         redisMemory,
         inMemoryCaches,
         globalState,
@@ -222,84 +215,6 @@ class MemorySnapshotService {
       heapUsedPercentage: (mem.heapUsed / mem.heapTotal) * 100,
       external: mem.external,
       arrayBuffers: mem.arrayBuffers
-    };
-  }
-
-  /**
-   * Collect V8 heap statistics
-   */
-  private collectV8HeapStats() {
-    const heapStats = v8.getHeapStatistics();
-    return {
-      totalHeapSize: heapStats.total_heap_size,
-      totalHeapSizeExecutable: heapStats.total_heap_size_executable,
-      totalPhysicalSize: heapStats.total_physical_size,
-      totalAvailableSize: heapStats.total_available_size,
-      usedHeapSize: heapStats.used_heap_size,
-      heapSizeLimit: heapStats.heap_size_limit,
-      mallocedMemory: heapStats.malloced_memory,
-      peakMallocedMemory: heapStats.peak_malloced_memory,
-      doesZapGarbage: heapStats.does_zap_garbage,
-      numberOfNativeContexts: heapStats.number_of_native_contexts,
-      numberOfDetachedContexts: heapStats.number_of_detached_contexts
-    };
-  }
-
-  /**
-   * Collect system resource statistics
-   */
-  private collectSystemResources() {
-    // Active handles and requests
-    const handles = (process as any)._getActiveHandles?.() || [];
-    const requests = (process as any)._getActiveRequests?.() || [];
-
-    // Log buffer size
-    let logBufferEntries = 0;
-    let logBufferSizeBytes = 0;
-    try {
-      const logBuffer = (global as any).__logBuffer__;
-      if (logBuffer && logBuffer instanceof Map) {
-        logBufferEntries = logBuffer.size;
-        for (const lines of logBuffer.values()) {
-          logBufferSizeBytes += lines.join('\n').length;
-        }
-      }
-    } catch { /* ignore */ }
-
-    // Count timers and intervals
-    let timerCount = 0;
-    try {
-      // Count setInterval/setTimeout in active handles
-      timerCount = handles.filter((h: any) =>
-        h?.constructor?.name === 'Timeout' || h?._idleTimeout > 0
-      ).length;
-    } catch { /* ignore */ }
-
-    // Count event listeners
-    let eventListenerCount = 0;
-    try {
-      // This is an approximation - count listeners on known emitters
-      if (this.mainQueue) {
-        const mainListeners = (this.mainQueue as any).listenerCount;
-        if (typeof mainListeners === 'function') {
-          eventListenerCount += mainListeners.call(this.mainQueue, '*');
-        }
-      }
-      if (this.counterbidQueue) {
-        const counterbidListeners = (this.counterbidQueue as any).listenerCount;
-        if (typeof counterbidListeners === 'function') {
-          eventListenerCount += counterbidListeners.call(this.counterbidQueue, '*');
-        }
-      }
-    } catch { /* ignore */ }
-
-    return {
-      activeHandles: handles.length,
-      activeRequests: requests.length,
-      logBufferEntries,
-      logBufferSizeKB: Math.round(logBufferSizeBytes / 1024),
-      timerCount,
-      eventListenerCount
     };
   }
 
@@ -519,8 +434,15 @@ class MemorySnapshotService {
    */
   private collectWorkerStats() {
     try {
-      // Collect per-worker stats (single worker array for unified queue)
-      const workerStats = this.mainWorkers.map((worker, index) => ({
+      // Collect per-worker stats
+      const mainWorkerStats = this.mainWorkers.map((worker, index) => ({
+        index,
+        concurrency: worker.concurrency,
+        running: worker.isRunning(),
+        paused: worker.isPaused()
+      }));
+
+      const counterbidWorkerStats = this.counterbidWorkers.map((worker, index) => ({
         index,
         concurrency: worker.concurrency,
         running: worker.isRunning(),
@@ -528,22 +450,24 @@ class MemorySnapshotService {
       }));
 
       // Aggregate totals
-      const totalConcurrency = workerStats.reduce((sum, w) => sum + w.concurrency, 0);
+      const mainConcurrency = mainWorkerStats.reduce((sum, w) => sum + w.concurrency, 0);
+      const counterbidConcurrency = counterbidWorkerStats.reduce((sum, w) => sum + w.concurrency, 0);
 
       // Check if all workers are running (healthy)
-      const allRunning = workerStats.every(w => w.running);
+      const allMainRunning = mainWorkerStats.every(w => w.running);
+      const allCounterbidRunning = counterbidWorkerStats.every(w => w.running);
 
-      // Return in schema-compatible format (aggregated)
+      // Return in schema-compatible format (aggregated, not arrays)
       return {
         main: {
-          concurrency: totalConcurrency,
-          running: allRunning
+          concurrency: mainConcurrency,
+          running: allMainRunning
         },
         counterbid: {
-          concurrency: 0, // No separate counterbid workers
-          running: false
+          concurrency: counterbidConcurrency,
+          running: allCounterbidRunning
         },
-        totalConcurrency
+        totalConcurrency: mainConcurrency + counterbidConcurrency
       };
     } catch (error) {
       errorLog('MemorySnapshot', 'Error collecting worker stats', error);
@@ -556,29 +480,29 @@ class MemorySnapshotService {
   }
 
   /**
-   * Collect concurrency allocation statistics (simplified for single queue)
+   * Collect concurrency allocation statistics from workers directly
    */
   private collectConcurrencyAllocation() {
     try {
-      // Single queue architecture - no dynamic allocation
-      const RATE_LIMIT = Number(process.env.RATE_LIMIT || 64);
+      const mainConcurrency = this.mainWorkers.reduce((sum, w) => sum + w.concurrency, 0);
+      const counterbidConcurrency = this.counterbidWorkers.reduce((sum, w) => sum + w.concurrency, 0);
       return {
-        activeCounterbidJobs: 0, // No separate tracking
-        totalConcurrency: RATE_LIMIT,
+        activeCounterbidJobs: 0,
+        totalConcurrency: mainConcurrency + counterbidConcurrency,
         currentAllocation: {
-          counterbid: 0, // No separate allocation
-          main: RATE_LIMIT // All concurrency in single queue
+          counterbid: counterbidConcurrency,
+          main: mainConcurrency
         }
       };
     } catch (error) {
       errorLog('MemorySnapshot', 'Error collecting concurrency allocation', error);
-      const RATE_LIMIT = Number(process.env.RATE_LIMIT || 64);
+      const RATE_LIMIT = Number(process.env.RATE_LIMIT || 8);
       return {
         activeCounterbidJobs: 0,
-        totalConcurrency: RATE_LIMIT,
+        totalConcurrency: RATE_LIMIT * 10,
         currentAllocation: {
-          counterbid: 0,
-          main: RATE_LIMIT
+          counterbid: RATE_LIMIT * 5,
+          main: RATE_LIMIT * 5
         }
       };
     }

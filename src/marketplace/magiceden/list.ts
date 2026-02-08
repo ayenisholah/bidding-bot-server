@@ -1,7 +1,7 @@
 import { Wallet } from "ethers";
 import { BASE_URL } from "../../constants";
 import { approveNFT } from "../../functions/approve";
-import { axiosInstance } from "../../init";
+import { axiosInstance, limiter } from "../../init";
 import Listing from "../../models/listing.model";
 import { errorLog, warnLog } from "../../utils/debug-file-logger";
 import Bottleneck from "bottleneck";
@@ -52,7 +52,9 @@ import { convertDurationForMagicEden } from "../../utils/duration";
 const API_KEY = process.env.API_KEY;
 
 // Create a separate rate limiter for Magic Eden
-// Magic Eden has a strict limit: 20 requests per 60 seconds
+// Magic Eden has a strict limit: 20 requests per 60 seconds.
+// Requests still pass through the global limiter to preserve one global
+// fixed-step emission stream for nfttools.pro APIs.
 const magicEdenLimiter = new Bottleneck({
   minTime: 3000,        // 3 seconds between requests (20 req/60s = 1 req/3s)
   maxConcurrent: 1,     // Only 1 concurrent request at a time
@@ -60,6 +62,15 @@ const magicEdenLimiter = new Bottleneck({
   reservoirRefreshAmount: 20,
   reservoirRefreshInterval: 60 * 1000, // Refill every 60 seconds
 });
+
+function scheduleMagicEdenApiCall<T>(fn: () => Promise<T>): Promise<T> {
+  return magicEdenLimiter.schedule(() => {
+    if (limiter) {
+      return limiter.schedule(fn);
+    }
+    return fn();
+  });
+}
 
 /**
  * Lists an NFT on Magic Eden marketplace
@@ -143,7 +154,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       ],
     };
 
-    const listResponse = await magicEdenLimiter.schedule(() =>
+    const listResponse = await scheduleMagicEdenApiCall(() =>
       axiosInstance.post(
         listEndpoint,
         listPayload,
@@ -198,7 +209,7 @@ export async function listOnMagicEden(walletAddress: string, contract: string, t
       source: "magiceden.io",
     };
 
-    const finalListingResponse = await magicEdenLimiter.schedule(() =>
+    const finalListingResponse = await scheduleMagicEdenApiCall(() =>
       axiosInstance.post(
         `${signEndpoint}?signature=${encodeURIComponent(signature)}`,
         order,

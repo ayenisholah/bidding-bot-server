@@ -1,0 +1,193 @@
+graph TB
+    %% Client Layer
+    subgraph "Client Layer"
+        WC[WebSocket Client]
+        HC[HTTP Client]
+    end
+
+    %% API Gateway
+    subgraph "API Gateway"
+        EXP[Express Server<br/>Port 3001]
+        WSS[WebSocket Server]
+        
+        subgraph "REST Endpoints"
+            AE1[Health & Status]
+            AE2[Task Management]
+            AE3[Collection Data]
+            AE4[Authentication]
+            AE5[Wallet & NFTs]
+        end
+        
+        subgraph "WebSocket Events"
+            WE1[Task Events]
+            WE2[Listing Events]
+            WE3[Marketplace Config]
+        end
+    end
+
+    %% Queue System
+    subgraph "Queue System"
+        RQ[Redis Queue<br/>BullMQ]
+        
+        subgraph "Job Types"
+            JT1[Bidding Jobs]
+            JT2[Counterbid Jobs]
+            JT3[Listing Jobs]
+            JT4[Cancellation Jobs]
+        end
+        
+        WP[Worker Pool<br/>Dynamic Scaling]
+    end
+
+    %% Core Services
+    subgraph "Core Services"
+        TM[Task Manager]
+        LM[Listing Manager]
+        WSM[WebSocket Manager<br/>Real-time Monitoring]
+        
+        subgraph "Utilities"
+            CM[Cache Manager<br/>BoundedCache]
+            CB[Circuit Breaker]
+            RL[Rate Limiter]
+            LOG[Logger<br/>Axiom Integration]
+        end
+    end
+
+    %% Marketplace Adapters
+    subgraph "Marketplace Adapters"
+        subgraph "OpenSea"
+            OS1[Seaport 1.6 Protocol]
+            OS2[GraphQL API]
+            OS3[REST API]
+        end
+        
+        subgraph "Magic Eden"
+            ME1[REST API]
+            ME2[Collection Stats]
+            ME3[Order Management]
+        end
+        
+        subgraph "Blur"
+            BL1[WebSocket API]
+            BL2[Stats API]
+            BL3[Blur Pool]
+        end
+    end
+
+    %% Data Layer
+    subgraph "Data Layer"
+        subgraph "PostgreSQL"
+            PG1[Orders Table]
+            PG2[Wallets Table]
+        end
+        
+        subgraph "MongoDB"
+            MG1[Tasks Collection]
+            MG2[Listings Collection]
+            MG3[Users Collection]
+            MG4[Logs Collection]
+        end
+        
+        subgraph "Redis"
+            RD1[Queue Storage]
+            RD2[Cache Storage]
+            RD3[Distributed Locks]
+            RD4[Session Storage]
+        end
+    end
+
+    %% Security Layer
+    subgraph "Security"
+        CR[Crypto Utils<br/>AES-256-GCM]
+        AU[Auth Manager<br/>JWT + API Keys]
+        WE[Wallet Encryption]
+    end
+
+    %% Monitoring
+    subgraph "Monitoring"
+        HM[Health Monitor]
+        PM[Performance Metrics]
+        EM[Error Tracking]
+        QM[Queue Metrics]
+    end
+
+    %% External Services
+    subgraph "External Services"
+        WP2[WebSocket Proxy<br/>nfttools-ws-proxy]
+        MP[Marketplace APIs]
+        BC[Blockchain RPC]
+        AX[Axiom Logging]
+    end
+
+    %% Connections - Client to Gateway
+    WC --> WSS
+    HC --> EXP
+    
+    %% Gateway to Services
+    EXP --> AE1 & AE2 & AE3 & AE4 & AE5
+    WSS --> WE1 & WE2 & WE3
+    
+    %% Services to Queue
+    WE1 --> TM
+    WE2 --> LM
+    TM --> RQ
+    LM --> RQ
+    
+    %% Queue Processing
+    RQ --> JT1 & JT2 & JT3 & JT4
+    JT1 & JT2 & JT3 & JT4 --> WP
+    
+    %% Worker to Adapters
+    WP --> OS1 & ME1 & BL1
+    
+    %% Adapters to External
+    OS1 & OS2 & OS3 --> MP
+    ME1 & ME2 & ME3 --> MP
+    BL1 & BL2 & BL3 --> MP
+    
+    %% WebSocket Manager
+    WSM --> WP2
+    WP2 --> WSM
+    
+    %% Data Flow
+    WP --> PG1 & PG2
+    WP --> MG1 & MG2 & MG4
+    TM --> MG1
+    LM --> MG2
+    
+    %% Cache Flow
+    CM --> RD2
+    RQ --> RD1
+    
+    %% Security Flow
+    AU --> CR
+    CR --> WE
+    WE --> PG2
+    
+    %% Monitoring Flow
+    EXP --> HM
+    RQ --> QM
+    WP --> PM
+    LOG --> AX
+    
+    %% Utility Usage
+    WP --> CB
+    WP --> RL
+    WP --> CM
+    
+    %% Style
+    classDef client fill:#e1f5fe,stroke:#01579b,stroke-width:2px
+    classDef gateway fill:#f3e5f5,stroke:#4a148c,stroke-width:2px
+    classDef service fill:#e8f5e9,stroke:#1b5e20,stroke-width:2px
+    classDef queue fill:#fff3e0,stroke:#e65100,stroke-width:2px
+    classDef data fill:#fce4ec,stroke:#880e4f,stroke-width:2px
+    classDef external fill:#f1f8e9,stroke:#33691e,stroke-width:2px
+    classDef security fill:#ffebee,stroke:#b71c1c,stroke-width:2px
+    
+    class WC,HC client
+    class EXP,WSS,AE1,AE2,AE3,AE4,AE5,WE1,WE2,WE3 gateway
+    class TM,LM,WSM,CM,CB,RL,LOG service
+    class RQ,JT1,JT2,JT3,JT4,WP queue
+    class PG1,PG2,MG1,MG2,MG3,MG4,RD1,RD2,RD3,RD4 data
+    class WP2,MP,BC,AX external
+    class CR,AU,WE security
