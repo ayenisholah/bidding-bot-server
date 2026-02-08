@@ -123,7 +123,9 @@ class MemorySnapshotService {
         mongoCollections,
         memoryCleanup,
         lruCaches,
-        unboundedDataStructures
+        unboundedDataStructures,
+        v8HeapStats,
+        systemResources
       ] = await Promise.all([
         Promise.resolve(this.collectProcessMemory()),
         this.collectRedisMemory().catch((err: Error) => {
@@ -165,6 +167,16 @@ class MemorySnapshotService {
           errorCount++;
           errors.push(`UnboundedDataStructures: ${err.message}`);
           return this.getEmptyUnboundedDataStructuresStats();
+        }),
+        Promise.resolve(this.collectV8HeapStats()).catch((err: Error) => {
+          errorCount++;
+          errors.push(`V8HeapStats: ${err.message}`);
+          return this.getEmptyV8HeapStats();
+        }),
+        Promise.resolve(this.collectSystemResources()).catch((err: Error) => {
+          errorCount++;
+          errors.push(`SystemResources: ${err.message}`);
+          return this.getEmptySystemResources();
         })
       ]);
 
@@ -185,6 +197,8 @@ class MemorySnapshotService {
         memoryCleanup,
         lruCaches,
         unboundedDataStructures,
+        v8HeapStats,
+        systemResources,
         workers,
         concurrencyAllocation,
         metadata: {
@@ -819,6 +833,101 @@ class MemorySnapshotService {
       errorLog('MemorySnapshot', 'Error cleaning up old snapshots', error);
       return 0;
     }
+  }
+
+  /**
+   * Collect V8 heap statistics using Node.js v8 module
+   */
+  private collectV8HeapStats() {
+    try {
+      const v8 = require('v8');
+      const stats = v8.getHeapStatistics();
+
+      return {
+        totalHeapSize: stats.total_heap_size,
+        totalHeapSizeExecutable: stats.total_heap_size_executable,
+        totalPhysicalSize: stats.total_physical_size,
+        totalAvailableSize: stats.total_available_size,
+        usedHeapSize: stats.used_heap_size,
+        heapSizeLimit: stats.heap_size_limit,
+        mallocedMemory: stats.malloced_memory,
+        peakMallocedMemory: stats.peak_malloced_memory,
+        doesZapGarbage: stats.does_zap_garbage,
+        numberOfNativeContexts: stats.number_of_native_contexts,
+        numberOfDetachedContexts: stats.number_of_detached_contexts
+      };
+    } catch (error) {
+      console.error('[MemorySnapshot] Failed to collect V8 heap stats:', error);
+      return this.getEmptyV8HeapStats();
+    }
+  }
+
+  /**
+   * Provide empty V8 heap stats for error scenarios
+   */
+  private getEmptyV8HeapStats() {
+    return {
+      totalHeapSize: 0,
+      totalHeapSizeExecutable: 0,
+      totalPhysicalSize: 0,
+      totalAvailableSize: 0,
+      usedHeapSize: 0,
+      heapSizeLimit: 0,
+      mallocedMemory: 0,
+      peakMallocedMemory: 0,
+      doesZapGarbage: 0,
+      numberOfNativeContexts: 0,
+      numberOfDetachedContexts: 0
+    };
+  }
+
+  /**
+   * Collect system resource statistics
+   */
+  private collectSystemResources() {
+    try {
+      // Count active handles and requests
+      const activeHandles = (process as any)._getActiveHandles?.()?.length || 0;
+      const activeRequests = (process as any)._getActiveRequests?.()?.length || 0;
+
+      // Estimate timers (Node.js doesn't expose this directly)
+      const timerCount = 0; // Placeholder - Node.js doesn't provide direct timer count
+
+      // Count event listeners on process object
+      const eventListenerCount = process.listenerCount ?
+        ['exit', 'uncaughtException', 'unhandledRejection', 'SIGTERM', 'SIGINT']
+          .reduce((sum, event) => sum + (process.listenerCount(event) || 0), 0) : 0;
+
+      // Log buffer stats (from debug-file-logger if available)
+      const logBufferEntries = 0; // Placeholder
+      const logBufferSizeKB = 0; // Placeholder
+
+      return {
+        activeHandles,
+        activeRequests,
+        logBufferEntries,
+        logBufferSizeKB,
+        timerCount,
+        eventListenerCount
+      };
+    } catch (error) {
+      console.error('[MemorySnapshot] Failed to collect system resources:', error);
+      return this.getEmptySystemResources();
+    }
+  }
+
+  /**
+   * Provide empty system resources for error scenarios
+   */
+  private getEmptySystemResources() {
+    return {
+      activeHandles: 0,
+      activeRequests: 0,
+      logBufferEntries: 0,
+      logBufferSizeKB: 0,
+      timerCount: 0,
+      eventListenerCount: 0
+    };
   }
 
   // Helper methods for error fallbacks

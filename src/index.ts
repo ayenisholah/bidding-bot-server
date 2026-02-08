@@ -1792,10 +1792,35 @@ async function checkWorkerHealth() {
       }
     });
 
+    // Check all counterbid workers
+    counterbidWorkers.forEach((worker, index) => {
+      try {
+        workerStatuses.push({
+          index: index,
+          name: `counterbid-worker-${index}`,
+          running: worker.isRunning(),
+          paused: worker.isPaused(),
+          concurrency: worker.concurrency,
+          healthy: worker.isRunning() && !worker.isPaused()
+        });
+      } catch (error) {
+        workerStatuses.push({
+          index: index,
+          name: `counterbid-worker-${index}`,
+          running: false,
+          paused: false,
+          concurrency: 0,
+          healthy: false,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        });
+      }
+    });
+
+    const totalWorkers = mainWorkers.length + counterbidWorkers.length;
     const unhealthyWorkers = workerStatuses.filter(status => !status.healthy);
 
     if (unhealthyWorkers.length > 0) {
-      errorLog('HealthCheck', `Unhealthy workers detected: ${unhealthyWorkers.length}/${mainWorkers.length}`);
+      errorLog('HealthCheck', `Unhealthy workers detected: ${unhealthyWorkers.length}/${totalWorkers}`);
 
       let shouldRestartAll = false;
 
@@ -1811,8 +1836,15 @@ async function checkWorkerHealth() {
           }
         } else if (workerStatus.paused) {
           try {
-            if (workerStatus.index < mainWorkers.length) {
-              await mainWorkers[workerStatus.index].resume();
+            // Determine which worker array to use based on worker name
+            if (workerStatus.name.startsWith('main-worker-')) {
+              if (workerStatus.index < mainWorkers.length) {
+                await mainWorkers[workerStatus.index].resume();
+              }
+            } else if (workerStatus.name.startsWith('counterbid-worker-')) {
+              if (workerStatus.index < counterbidWorkers.length) {
+                await counterbidWorkers[workerStatus.index].resume();
+              }
             }
           } catch (error) {
             errorLog('HealthCheck', `Failed to resume worker ${workerStatus.index}`, error);
