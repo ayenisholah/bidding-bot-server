@@ -2167,16 +2167,13 @@ async function startServer() {
 
     // Single-queue architecture: 4 workers with evenly distributed concurrency
     const RATE_LIMIT_NUM = Number(RATE_LIMIT);
-    const concurrencyPerWorker = Math.floor(RATE_LIMIT_NUM / NUM_WORKERS);
-    const concurrencyRemainder = RATE_LIMIT_NUM % NUM_WORKERS;
-
     /**
      * Helper function to create a worker instance
      * Each worker processes all job types (scheduled bids + counterbids)
      */
     async function createWorker(index: number): Promise<Worker> {
       // Calculate concurrency for this worker (distribute remainder across first workers)
-      const workerConcurrency = concurrencyPerWorker + (index < concurrencyRemainder ? 1 : 0);
+      const workerConcurrency = RATE_LIMIT_NUM
 
       const workerConnection = await createBullMQConnection(`worker-${index}`);
       bullMQConnections.push(workerConnection);
