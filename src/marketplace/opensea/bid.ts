@@ -4,7 +4,7 @@ import crypto from 'crypto';
 import { ethers, Wallet } from "ethers";
 import { BASE_URL, SEAPORT_CONTRACT_ADDRESS, SEAPORT_MIN_ABI } from "../../constants";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
-import { activeTasks, API_KEY, decrementBidCount, pQueue, trackBidRate, incrementOwnBidCounter, updateTaskCancellationPercentage } from "../..";
+import { activeTasks, API_KEY, decrementBidCount, trackBidRate, incrementOwnBidCounter, updateTaskCancellationPercentage } from "../..";
 import { getCollectionTokenContractMap } from "../../functions/collection";
 import { getCachedCollectionDetails } from "../../utils/collection-cache";
 import { config } from "dotenv";
@@ -130,11 +130,6 @@ export function resetCacheStats() {
   };
 }
 
-// Log cache stats every 5 minutes
-setInterval(() => {
-  const stats = getCacheStats();
-}, 5 * 60 * 1000);
-
 // Performance timing utilitie
 // Use the shared debug-logs directory (handled by debug-file-logger.ts)
 
@@ -215,8 +210,6 @@ function hashPrivateKey(privateKey: string): string {
 function getWallet(privateKey: string): Wallet {
   const cacheKey = hashPrivateKey(privateKey);
   // Only log first 8 chars of hash for security (never log full key or hash)
-  const keyPrefix = cacheKey.substring(0, 8);
-
   const cached = walletCache.get(cacheKey);
   if (cached) {
     return cached;
@@ -232,8 +225,6 @@ function getWallet(privateKey: string): Wallet {
 // Invalidated immediately after successful bid placement
 async function getSeaportCounter(walletAddress: string): Promise<bigint> {
   const normalizedAddress = walletAddress.toLowerCase();
-  const walletPrefix = walletAddress.slice(0, 10);
-
   // Check cache first
   const cached = seaportCounterLRU.get(normalizedAddress);
   if (cached !== undefined) {
@@ -243,9 +234,7 @@ async function getSeaportCounter(walletAddress: string): Promise<bigint> {
 
   // Cache miss - fetch from blockchain
   trackSeaportCounterMiss();
-  const fetchStart = Date.now();
   const counter = await SEAPORT_CONTRACT.getCounter(walletAddress);
-  const fetchTime = Date.now() - fetchStart;
 
   // Cache for 30 seconds
   seaportCounterLRU.set(normalizedAddress, counter);
@@ -286,8 +275,6 @@ export async function cancelOpenseaRequest(taskId: string): Promise<number> {
   if (!controllers || controllers.length === 0) {
     return 0;
   }
-
-  const count = controllers.length;
 
   let cancelledCount = 0;
   for (let i = 0; i < controllers.length; i++) {
@@ -449,8 +436,6 @@ export async function resolveContractAddress(
   }
 
   cacheStats.contractResolution.misses++;
-  const resolveStart = Date.now();
-
   // STEP 2: Check Max Pain Override (Priority: Highest)
   if (normalizedSlug === MAX_PAIN_SLUG && MAX_PAIN_TOKEN_OVERRIDES.has(tokenKey)) {
     const address = MAX_PAIN_OVERRIDE_ADDRESS;
@@ -506,7 +491,6 @@ export async function resolveContractAddress(
     // STEP 6: Return mapped contract or fallback
     const resolvedAddress = contractMap?.[tokenKey] ?? fallbackAddress;
     contractResolutionLRU.set(cacheKey, resolvedAddress);
-    const resolveTime = Date.now() - resolveStart;
     return resolvedAddress;
 
   } catch (error) {
@@ -516,7 +500,6 @@ export async function resolveContractAddress(
 
     // Fallback to default address
     contractResolutionLRU.set(cacheKey, fallbackAddress);
-    const resolveTime = Date.now() - resolveStart;
     return fallbackAddress;
   }
 }
@@ -656,9 +639,7 @@ export async function bidOnOpensea(
         trackBalanceHit();
       } else {
         trackBalanceMiss();
-        const balanceCheckStart = Date.now();
         wethBalance = await fetchERC20Balance(wallet_address, currency);
-        const balanceCheckTime = Date.now() - balanceCheckStart;
 
         // Cache for 60 seconds
         balanceLRU.set(balanceCacheKey, wethBalance);
@@ -1041,7 +1022,6 @@ export async function bidOnOpensea(
  */
 async function submitOfferToOpensea(decimal: number, currencySymbol: string, bidCount: string, offerPrice: string, payload: IPayload, expiry = 900) {
   const [taskId] = bidCount.split(":")
-  const bidStartTime = Date.now();
 
   // Early blacklist check before entering limiter queue
   if (isTaskBlacklisted(taskId, 'opensea')) {
@@ -1142,7 +1122,6 @@ async function buildOffer(taskId: string, buildPayload: any) {
 
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
-  const buildStartTime = Date.now();
 
   try{
     const { data } = await limiter.schedule(async () => {
@@ -1314,15 +1293,7 @@ async function fetchMakerOfferForToken(
 
     // API RESPONSE log
 
-    // Log filtering details for debugging
-    if (orders.length > 0) {
-      const orderDetails = orders.map((o: any) => ({
-        hash: o.order_hash?.slice(0, 16),
-        expired: o.expiration_time * 1000 <= now,
-        cancelled: o.cancelled,
-        finalized: o.finalized
-      }));
-    }
+
 
     const activeOrder = orders.find((order: any) =>
       order.expiration_time * 1000 > now && !order.cancelled && !order.finalized
@@ -1336,8 +1307,6 @@ async function fetchMakerOfferForToken(
     // Extract slug from taker_asset_bundle
     const takerAsset = activeOrder.taker_asset_bundle?.assets?.[0];
     const slug = takerAsset?.collection?.collection || '';
-    const priceEth = Number(activeOrder.current_price) / Math.pow(10, 18);
-    const expiresInMin = Math.round((activeOrder.expiration_time * 1000 - now) / 60000);
 
     // ACTIVE ORDER FOUND log
 
@@ -1362,7 +1331,6 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
 
   const task = activeTasks.get(taskId);
   const collectionSlug = slug || task?.contract?.slug?.toLowerCase();
-  const bidStartTime = Date.now();
 
   const parameters = offer as any;
 
@@ -2241,9 +2209,10 @@ export async function fetchOpenseaOffers(
     ];
 
     // Execute both queries in parallel
-    const [collectionResponse, traitResponse] = await pQueue.addAll(tasks, {
-      throwOnTimeout: true,
-    });
+    const results = await Promise.allSettled(tasks.map(t => t()));
+    const [collectionResponse, traitResponse] = results.map(r =>
+      r.status === 'fulfilled' ? r.value : null
+    );
 
     // Parse responses
     const collectionOffers = collectionResponse?.data?.data?.collectionOfferAggregates?.items || [];
@@ -2295,8 +2264,6 @@ export async function openseaTraitFloor(slug: string, trait: {
   traitType: string;
   values: string[];
 }) {
-  const identifier = `${trait.traitType}:${trait.values.join(',')}`;
-
   // Use LRU-only cache for fastest access (< 1ms vs 10-20ms Redis)
   const lruKey = `${slug}:${trait.traitType}:${trait.values.join(',')}`;
 
@@ -2309,7 +2276,6 @@ export async function openseaTraitFloor(slug: string, trait: {
 
   // Fetch from API (500-2000ms) - Phase 4: Direct fetch, no Redis layer
   cacheStats.traitFloor.misses++;
-  const fetchStart = Date.now();
 
   const variables: CollectionItemsQueryVariables = {
     collectionSlug: slug,
@@ -2338,12 +2304,9 @@ export async function openseaTraitFloor(slug: string, trait: {
   }));
   const floor = data.data.collectionItems.items[0].bestListing?.pricePerItem.token.unit;
 
-  const fetchTime = Date.now() - fetchStart;
-
   // Store in LRU cache
   if (floor !== null && floor !== undefined) {
     traitFloorLRU.set(lruKey, floor);
-  } else {
   }
 
   return floor;
@@ -2360,7 +2323,6 @@ export async function fetchOpenseaListings(taskId: string, collectionSlug: strin
   }
 
   // Cache miss - fetch from API
-  const fetchStart = Date.now();
   const baseUrl = `${BASE_URL}/opensea/api/v2/listings/collection/${collectionSlug}/best`;
   let allListings: OpenseaOrder[] = [];
   let nextCursor: string | null = null;
@@ -2389,8 +2351,6 @@ export async function fetchOpenseaListings(taskId: string, collectionSlug: strin
   }
 
   const result = uniqueTokenIds.slice(0, limit);
-  const fetchTime = Date.now() - fetchStart;
-
   // Store in LRU cache
   openseaListingsLRU.set(listingKey, result);
 

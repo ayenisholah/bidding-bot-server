@@ -127,6 +127,29 @@ interface UnboundedDataStructuresStats {
   loopSchedulingLocks: number;
 }
 
+interface V8HeapStats {
+  totalHeapSize: number;
+  totalHeapSizeExecutable: number;
+  totalPhysicalSize: number;
+  totalAvailableSize: number;
+  usedHeapSize: number;
+  heapSizeLimit: number;
+  mallocedMemory: number;
+  peakMallocedMemory: number;
+  doesZapGarbage: number;
+  numberOfNativeContexts: number;
+  numberOfDetachedContexts: number;
+}
+
+interface SystemResourceStats {
+  activeHandles: number;
+  activeRequests: number;
+  logBufferEntries: number;
+  logBufferSizeKB: number;
+  timerCount: number;
+  eventListenerCount: number;
+}
+
 export interface IMemorySnapshot extends Document {
   timestamp: Date;
 
@@ -139,6 +162,12 @@ export interface IMemorySnapshot extends Document {
     external: number;
     arrayBuffers: number;
   };
+
+  // NEW: V8 heap details
+  v8HeapStats: V8HeapStats;
+
+  // NEW: System resources tracking
+  systemResources: SystemResourceStats;
 
   // Redis memory by category
   redisMemory: {
@@ -210,6 +239,29 @@ const RedisKeyCategorySchema = new Schema({
   keyCount: { type: Number, required: true },
   totalMemoryBytes: { type: Number, required: true },
   sampleKeys: [String]
+}, { _id: false });
+
+const V8HeapStatsSchema = new Schema({
+  totalHeapSize: { type: Number, required: true },
+  totalHeapSizeExecutable: { type: Number, required: true },
+  totalPhysicalSize: { type: Number, required: true },
+  totalAvailableSize: { type: Number, required: true },
+  usedHeapSize: { type: Number, required: true },
+  heapSizeLimit: { type: Number, required: true },
+  mallocedMemory: { type: Number, required: true },
+  peakMallocedMemory: { type: Number, required: true },
+  doesZapGarbage: { type: Number, required: true },
+  numberOfNativeContexts: { type: Number, required: true },
+  numberOfDetachedContexts: { type: Number, required: true }
+}, { _id: false });
+
+const SystemResourceStatsSchema = new Schema({
+  activeHandles: { type: Number, required: true },
+  activeRequests: { type: Number, required: true },
+  logBufferEntries: { type: Number, required: true },
+  logBufferSizeKB: { type: Number, required: true },
+  timerCount: { type: Number, required: true },
+  eventListenerCount: { type: Number, required: true }
 }, { _id: false });
 
 const CacheStatsSchema = new Schema({
@@ -338,6 +390,9 @@ const MemorySnapshotSchema = new Schema<IMemorySnapshot>(
       external: { type: Number, required: true },
       arrayBuffers: { type: Number, required: true }
     },
+
+    v8HeapStats: { type: V8HeapStatsSchema, required: true },
+    systemResources: { type: SystemResourceStatsSchema, required: true },
 
     redisMemory: {
       categories: {

@@ -1,6 +1,6 @@
 import { ethers, Wallet, formatUnits } from "ethers";
 import { limiter, isTaskBlacklisted, axiosInstance } from "../../init";
-import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate, GOLD, updateTaskCancellationPercentage } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, RESET, trackBidRate, GOLD, updateTaskCancellationPercentage } from "../..";
 import { config } from "dotenv";
 import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
@@ -1015,9 +1015,10 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
       )
     ];
 
-    const [traitResponse, collectionResponse] = await pQueue.addAll(tasks, {
-      throwOnTimeout: true,
-    });
+    const results = await Promise.allSettled(tasks.map(t => t()));
+    const [traitResponse, collectionResponse] = results.map(r =>
+      r.status === 'fulfilled' ? r.value : { data: { success: false, priceLevels: [] } }
+    );
 
     const traitData = traitResponse.data;
     const collectionData = collectionResponse.data;

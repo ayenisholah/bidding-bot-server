@@ -24,7 +24,8 @@ const RPS_HISTORY_SECONDS = 10; // Keep a 10-second history for averaging
 const retryConfig: IAxiosRetryConfig = {
   retries: 3,
   retryDelay: (retryCount, error) => {
-    limiter.schedule(() => Promise.resolve());
+    // Retry timing is controlled by the return value below
+    // (retries happen inside the original limiter.schedule() callback, so they already bypass the limiter)
 
     // Special handling for 408 errors
     if (error.response?.status === 408) {
@@ -105,7 +106,7 @@ const retryConfig: IAxiosRetryConfig = {
 
 async function initialize(rateLimit: number) {
   axiosInstance = axios.create({ timeout: 30000 });
-  const concurrency = rateLimit * 1.5;
+  const concurrency = rateLimit
 
   limiter = new Bottleneck({
     minTime: 1000 / concurrency, // Minimum time between job starts

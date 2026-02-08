@@ -66,10 +66,8 @@ export async function captureLatencySnapshot(): Promise<ILatencySnapshot | null>
     const rssMB = Math.round(memUsage.rss / 1024 / 1024);
 
     // Queue stats placeholder (will be populated from index.ts if needed)
-    let mainQueueDepth = 0;
-    let mainActiveJobs = 0;
-    let counterbidQueueDepth = 0;
-    let counterbidActiveJobs = 0;
+    let queueDepth = 0;
+    let activeJobs = 0;
 
     // Note: Queue stats are optional - index.ts can call this function
     // with queue data passed through global state if needed
@@ -101,12 +99,12 @@ export async function captureLatencySnapshot(): Promise<ILatencySnapshot | null>
         heapPercent,
         rssMB,
         queueDepth: {
-          main: mainQueueDepth,
-          counterbid: counterbidQueueDepth,
+          main: queueDepth,
+          counterbid: 0, // No separate counterbid queue
         },
         activeJobs: {
-          main: mainActiveJobs,
-          counterbid: counterbidActiveJobs,
+          main: activeJobs,
+          counterbid: 0, // No separate counterbid queue
         },
       },
 

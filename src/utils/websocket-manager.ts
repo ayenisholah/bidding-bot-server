@@ -1,11 +1,9 @@
 import WebSocket from 'ws';
 import { EventEmitter } from 'events';
-import PQueue from 'p-queue';
 import { LRUCache } from 'lru-cache';
 import { warnLog, errorLog} from './debug-file-logger';
 import { config } from 'dotenv';
 import { recordForwarding } from '../services/forwarding-latency-tracker';
-import { RATE_LIMIT } from '..';
 
 config()
 
@@ -160,10 +158,7 @@ class WebSocketManager extends EventEmitter {
   // (2025-12-31: Removed backpressure queue - now using fire-and-forget for <100ms latency)
   private subscribedSlugs = new Set<string>();
 
-  // p-queue for bounded concurrent message processing with backpressure
-  // (2026-01-15: Replaces custom worker pool with p-queue for better timeout handling)
-  // (2026-01-21: Made unbounded to align with ws-proxy philosophy - no artificial limits)
-  private messageQueue: PQueue;
+  // (2026-02-07: Removed p-queue - all messages process in parallel without concurrency limits)
 
   constructor(config: WebSocketManagerConfig) {
     super();
@@ -177,15 +172,7 @@ class WebSocketManager extends EventEmitter {
       ...config
     };
 
-    // Initialize p-queue for message processing with hardcoded concurrency
-    // Queue is unbounded - relies on concurrency limiting and upstream flow control
-    this.messageQueue = new PQueue({
-      concurrency: RATE_LIMIT * 1.5,     // Hardcoded concurrency for optimal throughput
-      timeout: 30000,       // 30s timeout per message
-      throwOnTimeout: false // Graceful failures instead of crashing
-    });
-
-    // Log the configured concurrency
+    // (2026-02-07: Removed p-queue initialization - no concurrency limiting)
 
     // Load persistent listing subscriptions on initialization
     this.loadPersistentSubscriptions();
@@ -260,10 +247,6 @@ class WebSocketManager extends EventEmitter {
       this.ws.once('open', () => {
         clearTimeout(connectionTimeout);
         this.isReconnecting = false;
-
-        // Log successful reconnection before resetting counter
-        if (this.retryCount > 0) {
-        }
 
         this.retryCount = 0;
         this.onConnectionEstablished();
@@ -738,15 +721,15 @@ class WebSocketManager extends EventEmitter {
       // Normalize message format (minimal transformation)
       const message = this.normalizeMessage(parsed);
 
-      // Queue the message for processing via p-queue (unbounded)
-      this.messageQueue.add(async () => {
-        await this.processMessageAsync(message, receiveTime);
-      }).catch(err => {
+      // Process immediately without any concurrency limits
+      // All messages process in parallel - no queueing
+      // (2026-02-07: Removed p-queue wrapper - fire-and-forget architecture)
+      this.processMessageAsync(message, receiveTime).catch(err => {
         const errorMsg = err instanceof Error ? err.message : String(err);
-        errorLog('QueueError', `Message processing error | error=${errorMsg}`, err);
+        errorLog('MessageProcessing', `Message processing error | error=${errorMsg}`, err);
       });
     } catch (err) {
-      errorLog('QueueError', `processSingleMessage error | error=${(err as Error).message}`, err);
+      errorLog('MessageProcessing', `processSingleMessage error | error=${(err as Error).message}`, err);
     }
   }
 
@@ -978,9 +961,6 @@ class WebSocketManager extends EventEmitter {
     }
 
     this.metrics.connectionQuality = 'disconnected';
-
-    // Enhanced disconnect logging
-    const disconnectDuration = this.metrics.connectionDuration ? Math.floor(this.metrics.connectionDuration / 60000) : 0;
 
     // Clear intervals and timeouts
     this.clearAllIntervals();
@@ -1657,11 +1637,7 @@ class WebSocketManager extends EventEmitter {
         const data = fs.readFileSync(this.subscriptionStateFile, 'utf8');
         const subscriptions = JSON.parse(data);
         this.persistentListingSubscriptions = new Map(subscriptions);
-
-        // Log what was loaded from persistent storage
-        const loadedSlugs = Array.from(this.persistentListingSubscriptions.values()).map(v => v.slug);
-      } else {
-      }
+      } 
     } catch (error) {
       warnLog('WebSocket', `[PERSISTENT] Failed to load persistent subscriptions from file | error=${error}`);
     }
@@ -1673,7 +1649,6 @@ class WebSocketManager extends EventEmitter {
       const subscriptions = Array.from(this.persistentListingSubscriptions.entries());
       fs.writeFileSync(this.subscriptionStateFile, JSON.stringify(subscriptions, null, 2));
 
-      const savedSlugs = Array.from(this.persistentListingSubscriptions.values()).map(v => v.slug);
     } catch (error) {
       warnLog('WebSocket', `[PERSISTENT] Failed to save persistent subscriptions to file | error=${error}`);
     }

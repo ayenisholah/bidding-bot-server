@@ -28,6 +28,9 @@ try {
  * Groups log lines by file path to minimize I/O operations
  */
 const logBuffer = new Map<string, string[]>();
+// Expose for memory monitoring
+(global as any).__logBuffer__ = logBuffer;
+
 const FLUSH_INTERVAL_MS = 1000; // Flush every 1 second
 let flushIntervalId: NodeJS.Timeout | null = null;
 let isShuttingDown = false;

@@ -5,7 +5,7 @@
 import { ethers, Wallet } from "ethers";
 import { axiosInstance, limiter, isTaskBlacklisted } from "../../init";
 import { config } from "dotenv";
-import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, pQueue, trackBidRate, updateTaskCancellationPercentage } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, MAGENTA, trackBidRate, updateTaskCancellationPercentage } from "../..";
 import { orderCache, queueReplacedOrderCancellation } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
 import axios from "axios";
@@ -1384,9 +1384,10 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
       )
     ]
 
-    const [tokenResponse, collectionResponse] = await pQueue.addAll(tasks, {
-      throwOnTimeout: true,
-    });
+    const results = await Promise.allSettled(tasks.map(t => t()));
+    const [tokenResponse, collectionResponse] = results.map(r =>
+      r.status === 'fulfilled' ? r.value : { data: { orders: [] } }
+    );
     const data = [...tokenResponse.data.orders, ...collectionResponse.data.orders]
     const offers = data.map((order) => {
       return {
@@ -1447,9 +1448,10 @@ export async function fetchMagicEdenOffer(type: "COLLECTION" | "TRAIT" | "TOKEN"
       }
     ];
 
-    const [collectionResponse, traitResponse] = await pQueue.addAll(tasks, {
-      throwOnTimeout: true,
-    });
+    const results = await Promise.allSettled(tasks.map(t => t()));
+    const [collectionResponse, traitResponse] = results.map(r =>
+      r.status === 'fulfilled' ? r.value : { data: { orders: [] } }
+    );
     const data = [...collectionResponse.data.orders, ...traitResponse.data.orders];
     const offers = data.map((order) => {
       return {
