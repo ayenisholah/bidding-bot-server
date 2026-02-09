@@ -449,7 +449,7 @@ async function createBidData(
     const timeoutId = setTimeout(() => controller.abort(), 60000);
 
     try {
-      const { data: order } = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
+      const apiCall = async () => {
         // Re-check blacklist AFTER waiting in limiter queue
         if (isTaskBlacklisted(taskId, 'magiceden')) {
           throw new Error('Task stopped while waiting in limiter queue');
@@ -467,7 +467,11 @@ async function createBidData(
             timeout: 60000,
           }
         );
-      });
+      };
+      if (source === 'counterbid') {
+        limiter.schedule(() => Promise.resolve()).catch(() => {});
+      }
+      const { data: order } = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall));
 
       clearTimeout(timeoutId);
 
@@ -895,7 +899,7 @@ async function sendSignedOrderData(
       // For collection offers (v4), signature is in the payload, not in query params
       url = (!trait && !tokenId) ? endpoint : `${endpoint}?signature=${encodeURIComponent(signature)}`;
 
-      const { data: offerResponse } = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
+      const apiCall = async () => {
         // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
         if (isTaskBlacklisted(taskId, 'magiceden')) {
           throw new Error('Task stopped while waiting in limiter queue');
@@ -912,7 +916,11 @@ async function sendSignedOrderData(
             signal: controller.signal,
           }
         );
-      });
+      };
+      if (source === 'counterbid') {
+        limiter.schedule(() => Promise.resolve()).catch(() => {});
+      }
+      const { data: offerResponse } = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall));
       const responseTime = Date.now() - startTime;
       const successMessage = tokenId ? `🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TOKEN: ${tokenId} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉` :
         trait ?

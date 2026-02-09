@@ -1058,7 +1058,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
 
   let offer: OpenseaOffer;
   try {
-    const response = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
+    const apiCall = async () => {
       // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
       if (isTaskBlacklisted(taskId, 'opensea')) {
         throw new Error('Task stopped while waiting in limiter queue');
@@ -1077,7 +1077,11 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
         data: JSON.stringify(payload),
         signal: controller.signal,
       });
-    });
+    };
+    if (source === 'counterbid') {
+      limiter.schedule(() => Promise.resolve()).catch(() => {});
+    }
+    const response = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall));
     offer = response.data;
 
 
@@ -1397,7 +1401,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
   // Log request payload for debugging
 
   try {
-    const { data } = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
+    const apiCall = async () => {
       // Re-check blacklist AFTER waiting in limiter queue - critical fix for in-flight token bids
       if (isTaskBlacklisted(taskId, 'opensea')) {
         throw new Error('Task stopped while waiting in limiter queue');
@@ -1413,7 +1417,11 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
         },
         signal: controller.signal,
       });
-    })
+    };
+    if (source === 'counterbid') {
+      limiter.schedule(() => Promise.resolve()).catch(() => {});
+    }
+    const { data } = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall))
 
     return data
   } catch (error: any) {

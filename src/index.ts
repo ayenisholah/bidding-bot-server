@@ -6457,16 +6457,21 @@ async function processJob(job: Job, signal?: AbortSignal) {
           return; // Exit without processing
         }
 
-        // Check for authentication blocks first
-        try {
+        // Skip auth/pause checks for counterbid jobs (time-critical path)
+        const isCounterbidJob = [BLUR_COLLECTION_BID_COUNTERBID, BLUR_TRAIT_BID_COUNTERBID].includes(job.name);
+
+        if (!isCounterbidJob) {
           // Check authentication block (LRU cache)
           const block = blurAuthBlockLRU.get(walletAddress.toLowerCase());
           if (block && block.blockedUntil > Date.now()) {
             const waitTime = block.blockedUntil - Date.now();
-            // Wait for auth block to expire
-            await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
+            try {
+              await job.moveToDelayed(Date.now() + waitTime + 2500);
+            } catch (error) {
+              warnLog('Queue', `Failed to move job to delayed (auth block) | wallet=${walletAddress}`);
+            }
+            return;
           } else if (block) {
-            // Block has expired, clean it up
             blurAuthBlockLRU.delete(walletAddress.toLowerCase());
           }
 
@@ -6474,16 +6479,15 @@ async function processJob(job: Job, signal?: AbortSignal) {
           const pause = blurWalletPauseLRU.get(walletAddress.toLowerCase());
           if (pause && pause.pauseUntil > Date.now()) {
             const waitTime = pause.pauseUntil - Date.now();
-            const waitSeconds = Math.round(waitTime / 1000);
-
-            // Wait for pause to expire
-            await new Promise(resolve => setTimeout(resolve, waitTime + 2500));
+            try {
+              await job.moveToDelayed(Date.now() + waitTime + 2500);
+            } catch (error) {
+              warnLog('Queue', `Failed to move job to delayed (wallet pause) | wallet=${walletAddress}`);
+            }
+            return;
           } else if (pause) {
-            // Pause has expired, clean it up
             blurWalletPauseLRU.delete(walletAddress.toLowerCase());
           }
-        } catch (error) {
-          errorLog('Queue', `Redis auth/pause check failed | wallet=${walletAddress}`, error);
         }
       }
     }
@@ -18467,9 +18471,9 @@ async function magicedenCollectionCounterBid(job: Job<IMagicedenCollectionBidDat
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
-    // Cancel existing orders synchronously BEFORE placing new bid
+    // Fire-and-forget cancellation to avoid blocking the counterbid
     if (orders.length > 0) {
-      await cancelMagicEdenOrdersDirectly({
+      cancelMagicEdenOrdersDirectly({
         taskId,
         walletId,
         privateKey,
@@ -18477,7 +18481,9 @@ async function magicedenCollectionCounterBid(job: Job<IMagicedenCollectionBidDat
         source: 'magicedenCollectionCounterBid',
         identifier: 'collection',
         reason: 'counterbid_replace_existing'
-      });
+      }).catch(err =>
+        warnLog('Counterbid', `ME cancel failed (non-blocking) | taskId=${taskId}`, err)
+      );
     }
 
     if (DEBUG) {
@@ -18560,9 +18566,9 @@ async function magicedenTraitCounterBid(job: Job<IMagicedenTraitBidData>) {
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
-    // Cancel existing orders synchronously BEFORE placing new bid
+    // Fire-and-forget cancellation to avoid blocking the counterbid
     if (orders.length > 0) {
-      await cancelMagicEdenOrdersDirectly({
+      cancelMagicEdenOrdersDirectly({
         taskId,
         walletId,
         privateKey,
@@ -18570,7 +18576,9 @@ async function magicedenTraitCounterBid(job: Job<IMagicedenTraitBidData>) {
         source: 'magicedenTraitCounterBid',
         identifier,
         reason: 'counterbid_replace_existing'
-      });
+      }).catch(err =>
+        warnLog('Counterbid', `ME trait cancel failed (non-blocking) | taskId=${taskId}`, err)
+      );
     }
 
     // Log API start
@@ -18640,9 +18648,9 @@ async function blurCollectionCounterBid(job: Job<IBlurBidData>) {
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
-    // Cancel existing orders synchronously BEFORE placing new bid
+    // Fire-and-forget cancellation to avoid blocking the counterbid
     if (existingOrders.length > 0) {
-      await cancelBlurOrdersDirectly({
+      cancelBlurOrdersDirectly({
         taskId,
         walletId,
         privateKey,
@@ -18650,7 +18658,9 @@ async function blurCollectionCounterBid(job: Job<IBlurBidData>) {
         source: 'blurCollectionCounterBid',
         identifier,
         reason: 'counterbid_replace_existing'
-      });
+      }).catch(err =>
+        warnLog('Counterbid', `Blur cancel failed (non-blocking) | taskId=${taskId}`, err)
+      );
     }
 
     if (DEBUG) {
@@ -18746,9 +18756,9 @@ async function blurTraitCounterBid(job: Job<IBlurBidData>) {
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
-    // Cancel existing orders synchronously BEFORE placing new bid
+    // Fire-and-forget cancellation to avoid blocking the counterbid
     if (existingOrders.length > 0) {
-      await cancelBlurOrdersDirectly({
+      cancelBlurOrdersDirectly({
         taskId,
         walletId,
         privateKey,
@@ -18756,8 +18766,9 @@ async function blurTraitCounterBid(job: Job<IBlurBidData>) {
         source: 'blurTraitCounterBid',
         identifier,
         reason: 'counterbid_replace_existing'
-      });
-
+      }).catch(err =>
+        warnLog('Counterbid', `Blur trait cancel failed (non-blocking) | taskId=${taskId}`, err)
+      );
     }
 
     const offerEth = Number(offerPrice) / 1e18;
@@ -19150,9 +19161,9 @@ async function magicedenTokenCounterBid(job: Job<IMagicedenTokenBidData>) {
     const wallet = await walletCache.getWalletById(walletId);
     const privateKey: string = decryptPrivateKey(wallet?.encryptedPrivateKey as string);
 
-    // Cancel existing orders synchronously BEFORE placing new bid
+    // Fire-and-forget cancellation to avoid blocking the counterbid
     if (orders.length > 0) {
-      await cancelMagicEdenOrdersDirectly({
+      cancelMagicEdenOrdersDirectly({
         taskId,
         walletId,
         privateKey,
@@ -19160,7 +19171,9 @@ async function magicedenTokenCounterBid(job: Job<IMagicedenTokenBidData>) {
         source: 'magicedenTokenCounterBid',
         identifier: tokenId.toString(),
         reason: 'counterbid_replace_existing'
-      });
+      }).catch(err =>
+        warnLog('Counterbid', `ME token cancel failed (non-blocking) | taskId=${taskId}`, err)
+      );
     }
 
     // Log API start

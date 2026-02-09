@@ -581,7 +581,7 @@ async function formatBidOnBlur(
 
   while (retries <= maxRetries) {
     try {
-      const { data } = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
+      const apiCall = async () => {
         // Re-check blacklist AFTER waiting in limiter queue
         if (isTaskBlacklisted(taskId, 'blur')) {
           throw new Error('Task stopped while waiting in limiter queue');
@@ -600,7 +600,11 @@ async function formatBidOnBlur(
           signal: controller.signal,
           timeout: 60000,
         });
-      });
+      };
+      if (source === 'counterbid') {
+        limiter.schedule(() => Promise.resolve()).catch(() => {});
+      }
+      const { data } = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall));
 
       // Record successful request for adaptive rate limiting
       blurRateLimiter.recordError(walletAddress, false);
@@ -742,7 +746,7 @@ async function submitBidToBlur(
 
       while (submitRetries <= maxSubmitRetries) {
         try {
-          response = await limiter.schedule({ priority: source === 'counterbid' ? 2 : 5 }, async () => {
+          const apiCall = async () => {
             // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
             if (isTaskBlacklisted(parsedTaskId, 'blur')) {
               throw new Error('Task stopped while waiting in limiter queue');
@@ -761,7 +765,11 @@ async function submitBidToBlur(
               signal: controller.signal,
               timeout: 60000,
             });
-          });
+          };
+          if (source === 'counterbid') {
+            limiter.schedule(() => Promise.resolve()).catch(() => {});
+          }
+          response = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall));
           break; // Success, exit retry loop
         } catch (submitError: any) {
           // Handle 403 errors
