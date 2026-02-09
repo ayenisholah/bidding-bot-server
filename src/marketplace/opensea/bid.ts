@@ -1078,10 +1078,7 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
         signal: controller.signal,
       });
     };
-    if (source === 'counterbid') {
-      limiter.schedule(() => Promise.resolve()).catch(() => {});
-    }
-    const response = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall));
+    const response = await limiter.schedule({ priority: source === 'counterbid' ? 0 : 5 }, apiCall);
     offer = response.data;
 
 
@@ -1179,7 +1176,7 @@ async function buildOffer(taskId: string, buildPayload: any) {
 }
 
 // Internal function to cancel order without tracking completion (used for synchronized cancellation)
-async function cancelOrderInternal(orderHash: string, protocolAddress: string, privateKey: string, taskId: string, updateTracking: boolean = true) {
+async function cancelOrderInternal(orderHash: string, protocolAddress: string, privateKey: string, taskId: string, updateTracking: boolean = true, source?: string) {
   try {
     if (!orderHash || !protocolAddress || !privateKey) return
 
@@ -1200,7 +1197,7 @@ async function cancelOrderInternal(orderHash: string, protocolAddress: string, p
       throw error;
     }
 
-    const response = await limiter.schedule(() => axiosInstance.post(url, body, { headers }))
+    const response = await limiter.schedule({ priority: source === 'counterbid' ? 0 : 5 }, () => axiosInstance.post(url, body, { headers }))
 
     // Only update tracking if requested (for synchronized cancellation control)
     // When updateTracking=false, the caller (bulkCancelOpenseaBid) handles all tracking
@@ -1224,13 +1221,13 @@ async function cancelOrderInternal(orderHash: string, protocolAddress: string, p
 }
 
 // Public function to cancel order with tracking (original behavior)
-export async function cancelOrder(orderHash: string, protocolAddress: string, privateKey: string, taskId: string) {
-  return await cancelOrderInternal(orderHash, protocolAddress, privateKey, taskId, true);
+export async function cancelOrder(orderHash: string, protocolAddress: string, privateKey: string, taskId: string, source?: string) {
+  return await cancelOrderInternal(orderHash, protocolAddress, privateKey, taskId, true, source);
 }
 
 // Public function to cancel order without tracking (for synchronized cancellation)
-export async function cancelOrderWithoutTracking(orderHash: string, protocolAddress: string, privateKey: string, taskId: string) {
-  return await cancelOrderInternal(orderHash, protocolAddress, privateKey, taskId, false);
+export async function cancelOrderWithoutTracking(orderHash: string, protocolAddress: string, privateKey: string, taskId: string, source?: string) {
+  return await cancelOrderInternal(orderHash, protocolAddress, privateKey, taskId, false, source);
 }
 
 async function signCancelOrder(taskId: string, orderHash: string, protocolAddress: string, privateKey: string) {
@@ -1418,10 +1415,7 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
         signal: controller.signal,
       });
     };
-    if (source === 'counterbid') {
-      limiter.schedule(() => Promise.resolve()).catch(() => {});
-    }
-    const { data } = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall))
+    const { data } = await limiter.schedule({ priority: source === 'counterbid' ? 0 : 5 }, apiCall)
 
     return data
   } catch (error: any) {

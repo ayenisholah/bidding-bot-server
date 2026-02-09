@@ -2192,11 +2192,13 @@ async function startServer() {
     initializeQueueEventHandlers();
 
 
-    // Multi-worker architecture: Each worker gets 5x RATE_LIMIT concurrency
+    // Multi-worker architecture: Different concurrency per worker type.
     // BullMQ concurrency only controls parallelism (how many jobs run concurrently).
     // The Bottleneck rate limiter enforces the actual API rate (RPS).
-    // 5x headroom ensures the Bottleneck queue stays fed even with high API latency.
-    const concurrency = Number(RATE_LIMIT) * 5;
+    // Main workers: 5x headroom ensures the Bottleneck priority-5 queue stays fed.
+    // Counterbid workers: 1x keeps the Bottleneck queue shallow during bursts.
+    const mainConcurrency = Number(RATE_LIMIT) * 5;
+    const counterbidConcurrency = Number(RATE_LIMIT);
     const NUM_MAIN_WORKERS = 2;
     const NUM_COUNTERBID_WORKERS = 2;
 
@@ -2242,7 +2244,7 @@ async function startServer() {
         },
         {
           connection: workerConnection,
-          concurrency: concurrency, // Full RATE_LIMIT per worker
+          concurrency: mainConcurrency, // 5x RATE_LIMIT per worker - keeps Bottleneck queue fed
           lockDuration: 45000,       // 45 seconds - allows 1-2 sequential 30s API calls
           stalledInterval: 15000,    // 15 seconds - high-frequency stall detection
           maxStalledCount: 4         // 4 checks = 60s (triggers AFTER lock expires at 45s)
@@ -2455,7 +2457,7 @@ async function startServer() {
         },
         {
           connection: workerConnection,
-          concurrency: concurrency, // Full RATE_LIMIT per worker, adjusted dynamically by concurrency manager
+          concurrency: counterbidConcurrency, // 1x RATE_LIMIT per worker - shallow Bottleneck queue during bursts
           lockDuration: 45000,
           stalledInterval: 15000,
           maxStalledCount: 4
@@ -12733,11 +12735,12 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
       if (orders.length > 0) {
         const extractedOrderIds = await extractMagicedenOrderHash(orders)
         const orderKeys = orders.map((order: any) => order._id)
-        await queue.add(CANCEL_MAGICEDEN_BID, {
+        await counterbidQueue.add(CANCEL_MAGICEDEN_BID, {
           orderIds: extractedOrderIds,
           walletId: task.walletId,
           orderKeys,
-          taskId: task._id
+          taskId: task._id,
+          source: 'counterbid'
         });
       }
     }
@@ -12803,7 +12806,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
           if (orders.length > 0) {
             const orderKeys = orders.map((order: any) => order._id)
             const extractedOrderIds = await extractMagicedenOrderHash(orders)
-            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
+            await counterbidQueue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id, source: 'counterbid' });
           }
           return
         }
@@ -12820,7 +12823,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
             if (orders.length > 0) {
               const orderKeys = orders.map((order: any) => order._id)
               const extractedOrderIds = await extractMagicedenOrderHash(orders)
-              await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
+              await counterbidQueue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id, source: 'counterbid' });
             }
           }
           return;
@@ -13015,7 +13018,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
           if (allOrders.length > 0) {
             const orderKeys = allOrders.map((order) => order._id)
             const extractedOrderIds = await extractMagicedenOrderHash(allOrders)
-            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
+            await counterbidQueue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id, source: 'counterbid' });
           }
         }
         return
@@ -13027,7 +13030,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
         if (allOrders.length > 0) {
           const orderKeys = allOrders.map((order) => order._id)
           const extractedOrderIds = await extractMagicedenOrderHash(allOrders)
-          await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
+          await counterbidQueue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id, source: 'counterbid' });
         }
         return
       }
@@ -13051,7 +13054,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
           if (allTaskOrders.length > 0) {
             const orderKeys = allTaskOrders.map((order) => order._id)
             const extractedOrderIds = await extractMagicedenOrderHash(allTaskOrders)
-            await queue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id });
+            await counterbidQueue.add(CANCEL_MAGICEDEN_BID, { orderIds: extractedOrderIds, walletId: task.walletId, orderKeys: orderKeys, taskId: task._id, source: 'counterbid' });
           }
         }
         return;
@@ -13773,11 +13776,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
 
       if (incomingBidAmountEth > maxBidPriceEth) {
         if (currentTask.outbidOptions.cancelMaxWhenOutbid && ourOrder) {
-          await queue.add(CANCEL_OPENSEA_BID, {
+          await counterbidQueue.add(CANCEL_OPENSEA_BID, {
             walletId: task.walletId,
             orderId: ourOrder.orderHash,
             taskId: task._id,
-            orderKey: ourOrder._id
+            orderKey: ourOrder._id,
+            source: 'counterbid'
           });
         }
         return
@@ -13791,11 +13795,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
 
       if (offerPriceEth > maxBidPriceEth) {
         if (currentTask.outbidOptions.cancelMaxWhenOutbid && ourOrder) {
-          await queue.add(CANCEL_OPENSEA_BID, {
+          await counterbidQueue.add(CANCEL_OPENSEA_BID, {
             walletId: task.walletId,
             orderId: ourOrder.orderHash,
             taskId: task._id,
-            orderKey: ourOrder._id
+            orderKey: ourOrder._id,
+            source: 'counterbid'
           });
         }
         return;
@@ -13804,11 +13809,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
       const stopBid = await stopOption(currentTask, 'opensea', Number(floor_price), true)
       if (stopBid) {
         if (ourOrder) {
-          await queue.add(CANCEL_OPENSEA_BID, {
+          await counterbidQueue.add(CANCEL_OPENSEA_BID, {
             walletId: task.walletId,
             orderId: ourOrder.orderHash,
             taskId: task._id,
-            orderKey: ourOrder._id
+            orderKey: ourOrder._id,
+            source: 'counterbid'
           });
         }
         return
@@ -14000,11 +14006,12 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
 
         if (maxBidPriceEth > 0 && offerPriceEth > maxBidPriceEth) {
           if (currentTask.outbidOptions.cancelMaxWhenOutbid && ourOrder) {
-            await queue.add(CANCEL_OPENSEA_BID, {
+            await counterbidQueue.add(CANCEL_OPENSEA_BID, {
               walletId: task.walletId,
               orderId: ourOrder.orderHash,
               taskId: task._id,
-              orderKey: ourOrder._id
+              orderKey: ourOrder._id,
+              source: 'counterbid'
             });
           }
           return;
@@ -20776,8 +20783,8 @@ async function processMagicedenTraitBid(data: {
   }
 }
 
-async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, taskId: string, orderKey: string, identifier?: string }) {
-  const { walletId, orderId, taskId, orderKey, identifier } = data
+async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, taskId: string, orderKey: string, identifier?: string, source?: string }) {
+  const { walletId, orderId, taskId, orderKey, identifier, source } = data
   const safeWalletId = maskSensitiveIdentifier(walletId);
 
   // Debug log: Check if walletId is a valid MongoDB ObjectId
@@ -20817,7 +20824,7 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
 
 
     // First, cancel the order with OpenSea API (but don't update tracking yet)
-    await cancelOrderWithoutTracking(orderId, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId);
+    await cancelOrderWithoutTracking(orderId, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId, source);
 
     // Track successful cancellation for verification
     if (!successfullyCancelledOrders.has(taskId)) {
@@ -20861,8 +20868,8 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
   }
 }
 
-async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: string, orderKeys: string[], taskId: string, batchSize?: number }) {
-  const { orderIds, walletId, orderKeys, taskId, batchSize } = data
+async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: string, orderKeys: string[], taskId: string, batchSize?: number, source?: string }) {
+  const { orderIds, walletId, orderKeys, taskId, batchSize, source } = data
   const safeWalletId = maskSensitiveIdentifier(walletId);
 
 
@@ -20905,7 +20912,7 @@ async function bulkCancelMagicedenBid(data: { orderIds: string[], walletId: stri
       const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
 
       // Cancel the orders with MagicEden API
-      await cancelMagicEdenBid(orderIds, privateKey, taskId);
+      await cancelMagicEdenBid(orderIds, privateKey, taskId, source);
 
       // Track successful cancellation for verification
       if (!successfullyCancelledOrders.has(taskId)) {
@@ -21023,7 +21030,7 @@ async function validateBidCountInternal() {
 // validateBidCountInterval = setInterval(validateBidCount, STANDARD_INTERVAL);
 
 async function bulkCancelBlurBid(data: BlurCancelPayload) {
-  const { orderKey, walletId, taskId, payload } = data
+  const { orderKey, walletId, taskId, payload, source } = data
   const safeWalletId = maskSensitiveIdentifier(walletId);
 
 
@@ -21048,7 +21055,7 @@ async function bulkCancelBlurBid(data: BlurCancelPayload) {
     const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
 
     // Cancel the order with Blur API
-    await cancelBlurBid({ payload, privateKey, taskId });
+    await cancelBlurBid({ payload, privateKey, taskId, source });
 
     // Track successful cancellation for verification
     const orderId = JSON.stringify(payload); // Blur uses payload as order identifier
@@ -24500,7 +24507,7 @@ export async function fetchAddressBalances(walletAddress: string): Promise<Addre
   try {
     const { data } = await apiDedup(
       `opensea-balances-${normalizedAddress}`,
-      () => limiter.schedule({ priority: 0 }, () => axiosInstance.post<AddressBalancesResponse>(
+      () => limiter.schedule({ priority: 7 }, () => axiosInstance.post<AddressBalancesResponse>(
         `${BASE_URL}/opensea/graphql`,
         query,
         {
@@ -24531,7 +24538,7 @@ export async function fetchBlurTraits(
   try {
     const { data } = await apiDedup(
       `blur-traits-${contractAddress.toLowerCase()}`,
-      () => limiter.schedule({ priority: 0 }, () => axiosInstance.get(url, {
+      () => limiter.schedule({ priority: 7 }, () => axiosInstance.get(url, {
         headers: { "x-api-key": API_KEY },
       })),
       { category: 'BlurTraits' }
@@ -24554,7 +24561,7 @@ export async function fetchMagicEdenAttributes(
   try {
     const { data } = await apiDedup(
       `magiceden-attrs-${collectionId.toLowerCase()}`,
-      () => limiter.schedule({ priority: 0 }, () => axiosInstance.get<MagicEdenTraits>(url, {
+      () => limiter.schedule({ priority: 7 }, () => axiosInstance.get<MagicEdenTraits>(url, {
         headers: {
           accept: "application/json",
           "x-api-key": API_KEY,
@@ -24581,7 +24588,7 @@ const fetchCollectionData = async (slug: string) => {
       try {
         const result = await apiDedup(
           `opensea-collection-${slug.toLowerCase()}`,
-          () => limiter.schedule({ priority: 0 }, () => axiosInstance.get<CollectionData>(apiUrl, {
+          () => limiter.schedule({ priority: 7 }, () => axiosInstance.get<CollectionData>(apiUrl, {
             headers: { "x-api-key": API_KEY },
           })),
           { category: 'Collection' }
@@ -24600,7 +24607,7 @@ const fetchCollectionData = async (slug: string) => {
       try {
         const result = await apiDedup(
           `magiceden-collection-${slug.toLowerCase()}`,
-          () => limiter.schedule({ priority: 0 }, () => axiosInstance.post(
+          () => limiter.schedule({ priority: 7 }, () => axiosInstance.post(
             `${BASE_URL}/magiceden/v4/collections`,
             {
               chain: "ethereum",
@@ -25350,6 +25357,7 @@ interface BlurCancelPayload {
   walletId: string;
   orderKey: string;
   taskId: string;
+  source?: string;
 }
 
 function checkBlurTraits(incomingBids: any, traits: any) {

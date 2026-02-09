@@ -104,8 +104,16 @@ async function initialize(rateLimit: number) {
 
   // Constant-rate limiter: exactly 1 request per (1000/rateLimit) ms
   // e.g. RATE_LIMIT=100 → minTime=10ms → 100 RPS, no bursts
+  //
+  // maxConcurrent = max HTTP requests in-flight simultaneously.
+  // Must be >= rateLimit * (avgApiLatency / 1000) to sustain full throughput.
+  // Real marketplace latencies: ~1000ms avg, spikes to 2000ms, 1-5% timeout at 10s.
+  // rateLimit * 2 = 200 at rateLimit=100: handles 2000ms avg with headroom.
+  // Priority still works: when all 200 slots are occupied (heavy load/spike),
+  // highest-priority QUEUED job gets the next free slot.
   limiter = new Bottleneck({
     minTime: 1000 / rateLimit,
+    maxConcurrent: Math.ceil(rateLimit * 2), // 200 at rateLimit=100
     trackDoneStatus: true,
   });
 
@@ -513,6 +521,18 @@ export function scheduleWithTaskValidation(fn: () => PromiseLike<any>, taskId: s
   }
   return limiter.schedule(fn);
 }
+
+// Priority constants for Bottleneck limiter scheduling
+// Lower number = higher priority (Bottleneck default)
+export const PRIORITY = {
+  COUNTERBID: 0,       // Counterbid bids + their paired cancels
+  COUNTERBID_AUX: 1,   // CANCEL_OPENSEA_COUNTERBID, CANCEL_OPENSEA_OUTBID
+  ORDER_CACHE: 1,      // Order cache operations
+  SCHEDULED_CANCEL: 3, // Cancel old orders during task stop
+  SCHEDULED_BID: 5,    // Normal scheduled bids
+  FETCH_QUERY: 7,      // Floor prices, best offers, traits
+  BACKGROUND: 9,       // Collection data warming
+} as const;
 
 // Schedule with priority support - lower number = higher priority (0 = highest)
 export function scheduleWithPriority<T>(fn: () => PromiseLike<T>, priority?: number): Promise<T> {

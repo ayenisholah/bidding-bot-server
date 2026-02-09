@@ -323,7 +323,7 @@ export async function getOpenseaFloor(collectionSlug: string) {
       const { data } = await apiDedup(
         `opensea-floor-${collectionSlug}`,
         () => breaker.execute(() =>
-          limiter.schedule({ priority: 0 }, () => axiosInstance.post<FloorPriceResponse>(
+          limiter.schedule({ priority: 7 }, () => axiosInstance.post<FloorPriceResponse>(
             `${BASE_URL}/opensea/graphql`,
             payload,
             {
@@ -911,7 +911,7 @@ async function fetchOpenseaTraitsRecursive(
 
   const { data } = await apiDedup(
     `opensea-traits-${slug}-${cursor || 'initial'}`,
-    () => limiter.schedule({ priority: 0 }, () =>
+    () => limiter.schedule({ priority: 7 }, () =>
       axiosInstance.post<TraitResponse>(`${BASE_URL}/opensea/graphql`, payload, {
         headers: {
           "x-api-key": API_KEY

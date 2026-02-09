@@ -601,10 +601,7 @@ async function formatBidOnBlur(
           timeout: 60000,
         });
       };
-      if (source === 'counterbid') {
-        limiter.schedule(() => Promise.resolve()).catch(() => {});
-      }
-      const { data } = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall));
+      const { data } = await limiter.schedule({ priority: source === 'counterbid' ? 0 : 5 }, apiCall);
 
       // Record successful request for adaptive rate limiting
       blurRateLimiter.recordError(walletAddress, false);
@@ -766,10 +763,7 @@ async function submitBidToBlur(
               timeout: 60000,
             });
           };
-          if (source === 'counterbid') {
-            limiter.schedule(() => Promise.resolve()).catch(() => {});
-          }
-          response = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall));
+          response = await limiter.schedule({ priority: source === 'counterbid' ? 0 : 5 }, apiCall);
           break; // Success, exit retry loop
         } catch (submitError: any) {
           // Handle 403 errors
@@ -946,12 +940,12 @@ export async function cancelBlurBid(data: BlurCancelPayload) {
   let walletAddress: string | undefined;
   try {
     if (!data || !data.payload || !data.privateKey) return
-    const { payload, privateKey, taskId } = data
+    const { payload, privateKey, taskId, source } = data
     const wallet = new Wallet(privateKey, provider);
     walletAddress = wallet.address
     const accessToken = await getAccessToken(privateKey);
     const endpoint = `${BLUR_API_URL}/v1/collection-bids/cancel`
-    const { data: cancelResponse } = await limiter.schedule(() => axiosInstance.post(endpoint, payload, {
+    const { data: cancelResponse } = await limiter.schedule({ priority: source === 'counterbid' ? 0 : 5 }, () => axiosInstance.post(endpoint, payload, {
       headers: {
         'content-type': 'application/json',
         authToken: accessToken,
@@ -1203,6 +1197,7 @@ interface BlurCancelPayload {
   };
   privateKey: string;
   taskId: string;
+  source?: string;
 }
 
 interface SubmitPayload {

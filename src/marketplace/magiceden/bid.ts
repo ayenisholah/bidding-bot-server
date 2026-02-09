@@ -468,10 +468,7 @@ async function createBidData(
           }
         );
       };
-      if (source === 'counterbid') {
-        limiter.schedule(() => Promise.resolve()).catch(() => {});
-      }
-      const { data: order } = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall));
+      const { data: order } = await limiter.schedule({ priority: source === 'counterbid' ? 0 : 5 }, apiCall);
 
       clearTimeout(timeoutId);
 
@@ -917,10 +914,7 @@ async function sendSignedOrderData(
           }
         );
       };
-      if (source === 'counterbid') {
-        limiter.schedule(() => Promise.resolve()).catch(() => {});
-      }
-      const { data: offerResponse } = await (source === 'counterbid' ? apiCall() : limiter.schedule(apiCall));
+      const { data: offerResponse } = await limiter.schedule({ priority: source === 'counterbid' ? 0 : 5 }, apiCall);
       const responseTime = Date.now() - startTime;
       const successMessage = tokenId ? `🎉 TOKEN OFFER POSTED TO MAGICEDEN SUCCESSFULLY FOR: ${slug.toUpperCase()} TOKEN: ${tokenId} ${Number(offerPrice) / Math.pow(10, decimal)} ${currencySymbol} 🎉` :
         trait ?
@@ -1205,7 +1199,7 @@ export async function submitSignedOrderData(
 
 }
 
-export async function cancelMagicEdenBid(orderIds: string[], privateKey: string, taskId: string) {
+export async function cancelMagicEdenBid(orderIds: string[], privateKey: string, taskId: string, source?: string) {
   try {
     if (!orderIds?.length) return;
     const processedOrderIds = await Promise.all(orderIds?.map(async (orderId: any) => {
@@ -1220,7 +1214,7 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
 
     if (!processedOrderIds.length) return;
 
-    const { data } = await limiter.schedule(() => axiosInstance.post<MagicEdenCancelOfferCancel>(
+    const { data } = await limiter.schedule({ priority: source === 'counterbid' ? 0 : 5 }, () => axiosInstance.post<MagicEdenCancelOfferCancel>(
       `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/cancel/v3`,
       { orderIds: processedOrderIds },
       {
@@ -1258,7 +1252,7 @@ export async function cancelMagicEdenBid(orderIds: string[], privateKey: string,
       orderKind: 'payment-processor-v2'
     }
 
-    const { data: cancelResponse } = await limiter.schedule(() => axiosInstance.post(
+    const { data: cancelResponse } = await limiter.schedule({ priority: source === 'counterbid' ? 0 : 5 }, () => axiosInstance.post(
       `${BASE_URL}/magiceden/v3/rtp/ethereum/execute/cancel-signature/v1?signature=${signature}`,
       cancelBody,
       {
