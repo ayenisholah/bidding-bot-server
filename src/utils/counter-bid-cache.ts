@@ -1,7 +1,6 @@
 import { ITask } from '../models/task.model';
 import { walletCache } from './wallet-cache';
-import { collectionCache } from './collection-cache';
-import { logger, ErrorCategory } from './logger';
+import { getCachedCollectionDetails, getCachedFloorPrice } from './collection-cache';
 
 interface CachedTaskData {
   task: ITask;
@@ -42,7 +41,7 @@ class CounterBidCache {
       // Fetch all required data in parallel
       const [walletData, collectionDetails] = await Promise.all([
         task.wallet ? walletCache.getWallet(task.wallet).catch(() => null) : null,
-        task.contract.slug ? collectionCache.getCollectionDetails(task.contract.slug).catch(() => null) : null
+        task.contract.slug ? getCachedCollectionDetails(task.contract.slug).catch(() => null) : null
       ]);
 
       // Decrypt private key if wallet data exists
@@ -95,7 +94,7 @@ class CounterBidCache {
       if (task.contract.contractAddress || task.contract.slug) {
         const marketplaces = ['opensea', 'magiceden', 'blur'];
         const floorPricePromises = marketplaces.map(marketplace =>
-          collectionCache.getFloorPrice(
+          getCachedFloorPrice(
             task.contract.slug || task.contract.contractAddress,
             marketplace
           ).catch(() => null)
@@ -104,9 +103,7 @@ class CounterBidCache {
       }
 
       const loadTime = Date.now() - startTime;
-      console.log(`⚡ [CounterBidCache] Pre-warmed task ${taskId} in ${loadTime}ms`);
-      
-      await logger.logDebug(ErrorCategory.PERFORMANCE, 'Counter-bid cache pre-warm', {
+      console.log(`⚡ [CounterBidCache] Pre-warmed task ${taskId} in ${loadTime}ms`, {
         taskId,
         loadTime,
         hasWallet: !!walletData,
@@ -117,7 +114,6 @@ class CounterBidCache {
 
     } catch (error) {
       console.error(`Failed to preload cache for task ${task._id}:`, error);
-      await logger.logError(ErrorCategory.CACHE, 'Counter-bid cache preload failed', error as Error);
     }
   }
 
