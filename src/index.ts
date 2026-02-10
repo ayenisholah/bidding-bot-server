@@ -28,7 +28,7 @@ import stringify from 'json-stable-stringify';
 import WebSocket, { Server as WebSocketServer } from 'ws';
 import http from 'http';
 import os from 'os';
-import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlacklisted, getLimiterQueueDetails, cancelTaskJobs, getQueueHealth } from "./init";
+import { axiosInstance, initialize, limiter, removeTaskFromBlacklist, isTaskBlacklisted, getLimiterQueueDetails, cancelTaskJobs, getQueueHealth, PRIORITY } from "./init";
 import { bidOnOpensea, cancelOpenseaRequest, cancelOrderWithoutTracking, fetchItemOffers, fetchOpenseaListings, fetchOpenseaOffers, IFee, OpenseaOfferData, openseaTraitFloor, resolveContractAddress } from "./marketplace/opensea";
 import { bidOnBlur, cancelBlurBid, cancelBlurRequest, fetchBlurBid, fetchBlurCollectionStats, fetchBlurTraitFloor, getAccessToken, getAuthMetrics, getTimeoutMetrics, transferRestrictedCollections, authMetrics, timeoutMetrics } from "./marketplace/blur/bid";
 import { bidOnMagiceden, cancelMagicEdenBid, cancelMagicedenRequest, fetchMagicEdenCollectionStats, fetchMagicEdenOffer, fetchMagicEdenTokens, fetchMagicEdenTraitFloor } from "./marketplace/magiceden";
@@ -977,6 +977,61 @@ const CANCEL_OPENSEA_COUNTERBID = "CANCEL_OPENSEA_COUNTERBID"
 const CANCEL_OPENSEA_OUTBID = "CANCEL_OPENSEA_OUTBID"
 export const CANCEL_MAGICEDEN_BID = "CANCEL_MAGICEDEN_BID"
 export const CANCEL_BLUR_BID = "CANCEL_BLUR_BID"
+
+// ============================================
+// DIRECT COUNTERBID DISPATCH (bypass BullMQ)
+// ============================================
+// In-memory LRU dedup cache replaces BullMQ's jobId-based dedup.
+// Same key pattern: counterbidJobId from the calling code.
+const counterbidDedupCache = new LRUCache<string, number>({ max: 10000, ttl: 5000 });
+
+// Job type → counterbid handler function mapping (populated after function declarations)
+const counterbidHandlers: Record<string, (job: { data: any; id: string }) => Promise<void>> = {};
+
+/**
+ * Dispatch a counterbid directly through the rate limiter, bypassing BullMQ.
+ * Replaces counterbidQueue.add() for BID jobs (not CANCEL jobs).
+ *
+ * Latency: <10ms (vs 20-50ms through BullMQ round-trip)
+ */
+function dispatchCounterbidDirect(
+  jobType: string,
+  bidData: any,
+  dedupKey: string
+): void {
+  // 1. Dedup check (in-memory LRU)
+  if (counterbidDedupCache.has(dedupKey)) return;
+  counterbidDedupCache.set(dedupKey, Date.now());
+
+  // 2. Lightweight validation
+  const taskId = bidData.taskId || bidData._id;
+  if (taskId && isTaskBlacklisted(taskId)) return;
+  if (!getPassword()) return;
+
+  // 3. Get the handler
+  const handler = counterbidHandlers[jobType];
+  if (!handler) {
+    errorLog('DirectCounterbid', `Unknown job type: ${jobType}`);
+    return;
+  }
+
+  // 4. Queue depth guard: drop counterbid if queue is too deep (stale by dispatch time)
+  const MAX_COUNTERBID_QUEUE_DEPTH = RATE_LIMIT * 10;
+  const queued = limiter.counts().QUEUED;
+  if (queued > MAX_COUNTERBID_QUEUE_DEPTH) {
+    errorLog('DirectCounterbid', `Queue full (${queued}/${MAX_COUNTERBID_QUEUE_DEPTH}), dropping ${jobType}`);
+    return;
+  }
+
+  // 5. Fire-and-forget through limiter with highest priority
+  limiter.schedule({ priority: PRIORITY.COUNTERBID }, async () => {
+    // Create a lightweight job-like object with data and id
+    const mockJob = { data: bidData, id: dedupKey };
+    await handler(mockJob);
+  }).catch(err => {
+    errorLog('DirectCounterbid', `${jobType} failed: ${err.message}`);
+  });
+}
 
 // Retry configuration for cancellation jobs
 const CANCELLATION_JOB_RETRY_ATTEMPTS = 3; // 3 attempts total (1 initial + 2 retries)
@@ -12715,15 +12770,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
           }
         } else {
           // No existing job - add new one
-          await counterbidQueue.add(
-            MAGICEDEN_TOKEN_BID_COUNTERBID,
-            bidData,
-            {
-              jobId: counterbidJobId,
-              removeOnComplete: true,
-              removeOnFail: true
-            }
-          );
+          dispatchCounterbidDirect(MAGICEDEN_TOKEN_BID_COUNTERBID, bidData, counterbidJobId);
 
         }
       } catch (error: any) {
@@ -12866,12 +12913,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
               // Record forwarding latency with jobId for execution tracking
               recordForwarding('magiceden', receivedAt, Date.now(), counterbidJobId);
 
-              await counterbidQueue.add(MAGICEDEN_TRAIT_BID_COUNTERBID, bidData, {
-                jobId: counterbidJobId,
-                removeOnComplete: true,
-                removeOnFail: true
-              });
-    
+              dispatchCounterbidDirect(MAGICEDEN_TRAIT_BID_COUNTERBID, bidData, counterbidJobId);
+
             }
           } catch (queueError: any) {
             errorLog('Queue', `Failed to process MagicEden trait counterbid`, queueError);
@@ -12964,16 +13007,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 }
               } else {
                 // No existing job - add new one
-                await counterbidQueue.add(
-                  MAGICEDEN_TOKEN_BID_COUNTERBID,
-                  tokenBidData,
-                  {
-                    jobId: counterbidJobId,
-                    removeOnComplete: true,
-                    removeOnFail: true
-                  }
-                );
-      
+                dispatchCounterbidDirect(MAGICEDEN_TOKEN_BID_COUNTERBID, tokenBidData, counterbidJobId);
+
                 tokenCounterbidsQueued++;
               }
             } catch (queueError: any) {
@@ -13153,12 +13188,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
               // Record forwarding latency with jobId for execution tracking
               recordForwarding('magiceden', receivedAt, Date.now(), counterbidJobId);
 
-              await counterbidQueue.add(MAGICEDEN_TRAIT_BID_COUNTERBID, counterbidData, {
-                jobId: counterbidJobId,
-                removeOnComplete: true,
-                removeOnFail: true
-              });
-    
+              dispatchCounterbidDirect(MAGICEDEN_TRAIT_BID_COUNTERBID, counterbidData, counterbidJobId);
+
               counterbidsQueued++;
               ordersToCancel.push(order);
             } catch (queueError: any) {
@@ -13206,16 +13237,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 // Record forwarding latency with jobId for execution tracking
                 recordForwarding('magiceden', receivedAt, Date.now(), counterbidJobId);
 
-                await counterbidQueue.add(
-                  MAGICEDEN_COLLECTION_BID_COUNTERBID,
-                  bidData,
-                  {
-                    jobId: counterbidJobId,
-                    removeOnComplete: true,
-                    removeOnFail: true
-                  }
-                );
-      
+                dispatchCounterbidDirect(MAGICEDEN_COLLECTION_BID_COUNTERBID, bidData, counterbidJobId);
+
                 counterbidsQueued++;
                 ordersToCancel.push(order);
               }
@@ -13265,16 +13288,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 }
               } else {
                 // No existing job - add new one
-                await counterbidQueue.add(
-                  MAGICEDEN_TOKEN_BID_COUNTERBID,
-                  bidData,
-                  {
-                    jobId: counterbidJobId,
-                    removeOnComplete: true,
-                    removeOnFail: true
-                  }
-                );
-      
+                dispatchCounterbidDirect(MAGICEDEN_TOKEN_BID_COUNTERBID, bidData, counterbidJobId);
+
                 counterbidsQueued++;
                 ordersToCancel.push(order);
               }
@@ -13366,12 +13381,8 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
               // Record forwarding latency with jobId for execution tracking
               recordForwarding('magiceden', receivedAt, Date.now(), counterbidJobId);
 
-              await counterbidQueue.add(MAGICEDEN_TOKEN_BID_COUNTERBID, tokenBidData, {
-                jobId: counterbidJobId,
-                removeOnComplete: true,
-                removeOnFail: true
-              });
-    
+              dispatchCounterbidDirect(MAGICEDEN_TOKEN_BID_COUNTERBID, tokenBidData, counterbidJobId);
+
               tokenCollectionCounterbidsQueued++;
             } catch (queueError: any) {
               // Ignore duplicate job errors - this is expected with deterministic jobIds
@@ -13845,38 +13856,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
       }
 
 
-      // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
-      // Check for existing job and update if new price is higher
-      counterbidQueue.getJob(counterbidJobId).then(async (existingJob) => {
-        if (existingJob) {
-          const existingPrice = existingJob.data.offerPrice;
-          if (tokenOfferPriceForQueue > existingPrice) {
-            await existingJob.updateData({
-              ...existingJob.data,
-              offerPrice: tokenOfferPriceForQueue,
-              floor_price: floor_price,
-              maxBidPriceEth: maxBidPriceEth,
-              enqueuedAt: existingJob.data.enqueuedAt  // Preserve original enqueuedAt timestamp for accurate latency measurement
-            });
-          } else if (tokenOfferPriceForQueue === existingPrice) {
-          } else {
-          }
-        } else {
-          // No existing job - add new one
-          await counterbidQueue.add(
-            OPENSEA_TOKEN_BID_COUNTERBID,
-            bidData,
-            {
-              jobId: counterbidJobId,
-              removeOnComplete: true,
-              removeOnFail: true
-            }
-          );
-
-        }
-      }).catch((error: any) => {
-        errorLog('Queue', `Failed to process OpenSea token counterbid`, error);
-      });
+      dispatchCounterbidDirect(OPENSEA_TOKEN_BID_COUNTERBID, bidData, counterbidJobId);
     }
 
     if (data.event === "trait_offer") {
@@ -14080,39 +14060,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
               };
 
               const counterbidJobId = `CB-${task._id}-os-token-${tokenId}`;  // No price in jobId
-              // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
-              counterbidQueue.getJob(counterbidJobId).then(async (existingJob) => {
-                if (existingJob) {
-                  const existingPrice = existingJob.data.offerPrice;
-                  if (tokenOfferPriceForQueue > existingPrice) {
-                    await existingJob.updateData({
-                      ...existingJob.data,
-                      offerPrice: tokenOfferPriceForQueue,
-                      floor_price: floor_price,
-                      maxBidPriceEth: maxBidPriceEth,
-                      enqueuedAt: existingJob.data.enqueuedAt  // Preserve original enqueuedAt timestamp for accurate latency measurement
-                    });
-                    tokenCounterbidsQueued++;
-                  } else if (tokenOfferPriceForQueue === existingPrice) {
-                  } else {
-                  }
-                } else {
-                  // No existing job - add new one
-                  await counterbidQueue.add(
-                    OPENSEA_TOKEN_BID_COUNTERBID,
-                    tokenBidData,
-                    {
-                      jobId: counterbidJobId,
-                      removeOnComplete: true,
-                      removeOnFail: true
-                    }
-                  );
-        
-                  tokenCounterbidsQueued++;
-                }
-              }).catch((queueError: any) => {
-                errorLog('Queue', `Failed to process OpenSea token counterbid`, queueError);
-              });
+              dispatchCounterbidDirect(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, counterbidJobId);
+              tokenCounterbidsQueued++;
             }
           }
 
@@ -14163,16 +14112,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
               // Record forwarding latency with jobId for execution tracking
               recordForwarding('opensea', receivedAt, Date.now(), counterbidJobId);
 
-              await counterbidQueue.add(
-                OPENSEA_TRAIT_BID_COUNTERBID,
-                counterbidData,
-                {
-                  jobId: counterbidJobId,
-                  removeOnComplete: true,
-                  removeOnFail: true
-                }
-              );
-    
+              dispatchCounterbidDirect(OPENSEA_TRAIT_BID_COUNTERBID, counterbidData, counterbidJobId);
+
             }
           } catch (queueError: any) {
             errorLog('Queue', `Failed to process OpenSea trait counterbid`, queueError);
@@ -14295,20 +14236,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
               // Record forwarding latency with jobId for execution tracking
               recordForwarding('opensea', receivedAt, Date.now(), counterbidJobId);
 
-              // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
-              counterbidQueue.add(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, {
-                jobId: counterbidJobId,
-                removeOnComplete: true,
-                removeOnFail: true
-              }).then(() => {
-
-                tokenTraitCounterbidsQueued++;
-              }).catch((queueError: any) => {
-                if (queueError?.message?.includes('Job with this id already exists')) {
-                } else {
-                  errorLog('Queue', `Failed to queue token counterbid for trait defense`, queueError);
-                }
-              });
+              dispatchCounterbidDirect(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, counterbidJobId);
+              tokenTraitCounterbidsQueued++;
             }
           } catch (error) {
             errorLog('OpenSea', `Error processing token ${targetTokenId} for TOKEN-vs-TRAIT defense`, error);
@@ -14498,16 +14427,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
               // Record forwarding latency with jobId for execution tracking
               recordForwarding('opensea', receivedAt, Date.now(), counterbidJobId);
 
-              await counterbidQueue.add(
-                OPENSEA_TRAIT_BID_COUNTERBID,
-                counterbidData,
-                {
-                  jobId: counterbidJobId,
-                  removeOnComplete: true,
-                  removeOnFail: true
-                }
-              );
-    
+              dispatchCounterbidDirect(OPENSEA_TRAIT_BID_COUNTERBID, counterbidData, counterbidJobId);
+
               counterbidsQueued++;
             } catch (queueError: any) {
               if (!queueError?.message?.includes('Job with this id already exists')) {
@@ -14558,16 +14479,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                 // Record forwarding latency with jobId for execution tracking
                 recordForwarding('opensea', receivedAt, Date.now(), counterbidJobId);
 
-                await counterbidQueue.add(
-                  OPENSEA_COLLECTION_BID_COUNTERBID,
-                  bidData,
-                  {
-                    jobId: counterbidJobId,
-                    removeOnComplete: true,
-                    removeOnFail: true
-                  }
-                );
-      
+                dispatchCounterbidDirect(OPENSEA_COLLECTION_BID_COUNTERBID, bidData, counterbidJobId);
+
                 counterbidsQueued++;
               }
             } catch (queueError: any) {
@@ -14617,16 +14530,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                 }
               } else {
                 // No existing job - add new one
-                await counterbidQueue.add(
-                  OPENSEA_TOKEN_BID_COUNTERBID,
-                  bidData,
-                  {
-                    jobId: counterbidJobId,
-                    removeOnComplete: true,
-                    removeOnFail: true
-                  }
-                );
-      
+                dispatchCounterbidDirect(OPENSEA_TOKEN_BID_COUNTERBID, bidData, counterbidJobId);
+
                 counterbidsQueued++;
               }
             } catch (queueError: any) {
@@ -14755,20 +14660,8 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
               // Record forwarding latency with jobId for execution tracking
               recordForwarding('opensea', receivedAt, Date.now(), counterbidJobId);
 
-              // Fire-and-forget: non-blocking queue operation (saves 50-75ms)
-              counterbidQueue.add(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, {
-                jobId: counterbidJobId,
-                removeOnComplete: true,
-                removeOnFail: true
-              }).then(() => {
-
-                tokenCollectionCounterbidsQueued++;
-              }).catch((queueError: any) => {
-                if (queueError?.message?.includes('Job with this id already exists')) {
-                } else {
-                  errorLog('Queue', `Failed to queue token counterbid for collection defense`, queueError);
-                }
-              });
+              dispatchCounterbidDirect(OPENSEA_TOKEN_BID_COUNTERBID, tokenBidData, counterbidJobId);
+              tokenCollectionCounterbidsQueued++;
             }
           } catch (error) {
             errorLog('OpenSea', `Error processing token ${targetTokenId} for TOKEN-vs-COLLECTION defense`, error);
@@ -14985,12 +14878,8 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
             // Record forwarding latency with jobId for execution tracking
             recordForwarding('blur', receivedAt, Date.now(), counterbidJobId);
 
-            await counterbidQueue.add(BLUR_TRAIT_BID_COUNTERBID, bidData, {
-              jobId: counterbidJobId,
-              removeOnComplete: true,
-              removeOnFail: true
-            });
-  
+            dispatchCounterbidDirect(BLUR_TRAIT_BID_COUNTERBID, bidData, counterbidJobId);
+
           }
         } catch (queueError: any) {
           errorLog('Queue', `Failed to process Blur trait counterbid`, queueError);
@@ -15185,12 +15074,8 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
                 // Record forwarding latency with jobId for execution tracking
                 recordForwarding('blur', receivedAt, Date.now(), counterbidJobId);
 
-                await counterbidQueue.add(BLUR_TRAIT_BID_COUNTERBID, counterbidData, {
-                  jobId: counterbidJobId,
-                  removeOnComplete: true,
-                  removeOnFail: true
-                });
-      
+                dispatchCounterbidDirect(BLUR_TRAIT_BID_COUNTERBID, counterbidData, counterbidJobId);
+
                 counterbidsQueued++;
               }
             } catch (queueError: any) {
@@ -15235,12 +15120,8 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
                 // Record forwarding latency with jobId for execution tracking
                 recordForwarding('blur', receivedAt, Date.now(), counterbidJobId);
 
-                await counterbidQueue.add(BLUR_COLLECTION_BID_COUNTERBID, bidData, {
-                  jobId: counterbidJobId,
-                  removeOnComplete: true,
-                  removeOnFail: true
-                });
-      
+                dispatchCounterbidDirect(BLUR_COLLECTION_BID_COUNTERBID, bidData, counterbidJobId);
+
                 counterbidsQueued++;
               }
             } catch (queueError: any) {
@@ -16659,7 +16540,7 @@ async function processOpenseaCollectionBid(data: {
       // 2. Handle own bid case
       if (isOwnBid) {
         const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
-        const spread = roundToValidPrecision(spreadRaw);
+        const spread = Math.round(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -16671,6 +16552,7 @@ async function processOpenseaCollectionBid(data: {
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
           // Large spread but potential bid below min: keep current offer (don't lower below min)
+          collectionOffer = BigInt(Math.round(highestBidAmount));
           if (DEBUG) {
           }
         }
@@ -17777,7 +17659,7 @@ async function processOpenseaTraitBid(data: IProcessOpenseaTraitBidData) {
 
       if (isOwnBid) {
         const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
-        const spread = roundToValidPrecision(spreadRaw);
+        const spread = Math.round(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -17789,6 +17671,7 @@ async function processOpenseaTraitBid(data: IProcessOpenseaTraitBidData) {
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
           // Large spread but potential bid below min: keep current offer (don't lower below min)
+          traitOffer = BigInt(Math.round(highestBidAmount));
           if (DEBUG) {
           }
         }
@@ -18125,7 +18008,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       if (isOwnBid) {
         // We own the top bid - apply spread optimization
         const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
-        const spread = roundToValidPrecision(spreadRaw);
+        const spread = Math.round(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -18135,6 +18018,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         }
         else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
           // Large spread but potential bid below min: keep current offer
+          tokenOffer = BigInt(Math.round(highestBidAmount));
         }
         else if (ttl > MIN_BID_DURATION) {
           // Our bid is still valid with sufficient TTL
@@ -19214,6 +19098,16 @@ async function magicedenTokenCounterBid(job: Job<IMagicedenTokenBidData>) {
   }
 }
 
+// Initialize counterbid handler mapping for direct dispatch
+counterbidHandlers[OPENSEA_TOKEN_BID_COUNTERBID] = openseaTokenCounterBid as any;
+counterbidHandlers[OPENSEA_TRAIT_BID_COUNTERBID] = openseaTraitCounterBid as any;
+counterbidHandlers[OPENSEA_COLLECTION_BID_COUNTERBID] = openseaCollectionCounterBid as any;
+counterbidHandlers[MAGICEDEN_TOKEN_BID_COUNTERBID] = magicedenTokenCounterBid as any;
+counterbidHandlers[MAGICEDEN_TRAIT_BID_COUNTERBID] = magicedenTraitCounterBid as any;
+counterbidHandlers[MAGICEDEN_COLLECTION_BID_COUNTERBID] = magicedenCollectionCounterBid as any;
+counterbidHandlers[BLUR_COLLECTION_BID_COUNTERBID] = blurCollectionCounterBid as any;
+counterbidHandlers[BLUR_TRAIT_BID_COUNTERBID] = blurTraitCounterBid as any;
+
 
 async function processBlurTraitBid(data: {
   _id: string;
@@ -20122,7 +20016,7 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
 
       if (isOwnBid) {
         const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
-        const spread = roundToValidPrecision(spreadRaw);
+        const spread = Math.round(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -20351,7 +20245,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
       if (isOwnBid) {
         const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
-        const spread = roundToValidPrecision(spreadRaw);
+        const spread = Math.round(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -20372,7 +20266,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
 
       else if (isTopBid) {
         const spreadRaw = (Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal);
-        const spread = roundToValidPrecision(spreadRaw);
+        const spread = Math.round(spreadRaw);
         const highestBidAmountEth = Number(highestBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = highestBidAmountEth + outbidMargin;
 
@@ -20632,7 +20526,7 @@ async function processMagicedenTraitBid(data: {
 
       if (isOwnBid) {
         const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
-        const spread = roundToValidPrecision(spreadRaw);
+        const spread = Math.round(spreadRaw);
         const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
 
@@ -20652,7 +20546,7 @@ async function processMagicedenTraitBid(data: {
       }
       else if (isTopBid) {
         const spreadRaw = (Number(order.offerPrice) - Number(highestBidAmount)) / Math.pow(10, decimal);
-        const spread = roundToValidPrecision(spreadRaw);
+        const spread = Math.round(spreadRaw);
         const highestBidAmountEth = Number(highestBidAmount) / Math.pow(10, decimal);
         const potentialNewBidEth = highestBidAmountEth + outbidMargin;
 

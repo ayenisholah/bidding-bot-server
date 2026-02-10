@@ -1865,17 +1865,14 @@ export async function fetchOpenseaOffers(
       }
     };
 
-    const response = await apiDedup(
-      `opensea-collection-offers-${collectionSlug}`,
-      () => limiter?.schedule(priority !== undefined ? { priority } : {}, () =>
-        axiosInstance.post(`${BASE_URL}/opensea/graphql`, query, {
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY
-          }
-        })
-      ),
-      { category: 'OpenSea' }
+    const response = await limiter?.schedule(
+      priority !== undefined ? { priority } : {},
+      () => axiosInstance.post(`${BASE_URL}/opensea/graphql`, query, {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY
+        }
+      })
     );
     // Parse the GraphQL response
     const offerAggregates = response.data?.data?.collectionOfferAggregates?.items || [];
