@@ -1764,7 +1764,7 @@ async function checkWorkerHealth() {
 
     // Check all workers
     workers.forEach((worker, index) => {
-      try{
+      try {
         workerStatuses.push({
           index: index,
           name: `worker-${index}`,
@@ -2172,7 +2172,6 @@ async function startServer() {
      * Each worker processes all job types (scheduled bids + counterbids)
      */
     async function createWorker(index: number): Promise<Worker> {
-      // Calculate concurrency for this worker (distribute remainder across first workers)
       const workerConcurrency = RATE_LIMIT_NUM
 
       const workerConnection = await createBullMQConnection(`worker-${index}`);
@@ -5496,7 +5495,7 @@ function initializeQueueEventHandlers() {
                 const tokenAddress = getTokenAddressForCurrency(currency);
                 if (tokenAddress) {
                   const { invalidateBalanceCache } = await import('./utils/balance');
-                  await invalidateBalanceCache(walletAddress, tokenAddress);
+                  await invalidateBalanceCache(walletAddress);
                 }
 
                 // Stop all marketplaces that use this currency
@@ -12627,7 +12626,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 removeOnComplete: true,
                 removeOnFail: true
               });
-                }
+            }
           } catch (queueError: any) {
             errorLog('Queue', `Failed to process MagicEden trait counterbid`, queueError);
           }
@@ -12728,7 +12727,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                     removeOnFail: true
                   }
                 );
-                      tokenCounterbidsQueued++;
+                tokenCounterbidsQueued++;
               }
             } catch (queueError: any) {
               errorLog('Queue', `Failed to process MagicEden token counterbid`, queueError);
@@ -12912,7 +12911,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 removeOnComplete: true,
                 removeOnFail: true
               });
-                  counterbidsQueued++;
+              counterbidsQueued++;
               ordersToCancel.push(order);
             } catch (queueError: any) {
               if (!queueError?.message?.includes('Job with this id already exists')) {
@@ -12968,7 +12967,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                     removeOnFail: true
                   }
                 );
-                      counterbidsQueued++;
+                counterbidsQueued++;
                 ordersToCancel.push(order);
               }
             } catch (queueError: any) {
@@ -13026,7 +13025,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                     removeOnFail: true
                   }
                 );
-                      counterbidsQueued++;
+                counterbidsQueued++;
                 ordersToCancel.push(order);
               }
             } catch (queueError: any) {
@@ -13122,7 +13121,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 removeOnComplete: true,
                 removeOnFail: true
               });
-                  tokenCollectionCounterbidsQueued++;
+              tokenCollectionCounterbidsQueued++;
             } catch (queueError: any) {
               // Ignore duplicate job errors - this is expected with deterministic jobIds
               if (queueError?.message?.includes('Job with this id already exists')) {
@@ -13852,7 +13851,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                       removeOnFail: true
                     }
                   );
-                          tokenCounterbidsQueued++;
+                  tokenCounterbidsQueued++;
                 }
               }).catch((queueError: any) => {
                 errorLog('Queue', `Failed to process OpenSea token counterbid`, queueError);
@@ -13916,7 +13915,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                   removeOnFail: true
                 }
               );
-                }
+            }
           } catch (queueError: any) {
             errorLog('Queue', `Failed to process OpenSea trait counterbid`, queueError);
           }
@@ -14249,7 +14248,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                   removeOnFail: true
                 }
               );
-                  counterbidsQueued++;
+              counterbidsQueued++;
             } catch (queueError: any) {
               if (!queueError?.message?.includes('Job with this id already exists')) {
                 errorLog('Queue', `Failed to queue OpenSea trait counterbid`, queueError);
@@ -14308,7 +14307,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                     removeOnFail: true
                   }
                 );
-                      counterbidsQueued++;
+                counterbidsQueued++;
               }
             } catch (queueError: any) {
               errorLog('Queue', `Failed to process OpenSea collection counterbid`, queueError);
@@ -14366,7 +14365,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                     removeOnFail: true
                   }
                 );
-                      counterbidsQueued++;
+                counterbidsQueued++;
               }
             } catch (queueError: any) {
               errorLog('Queue', `Failed to process OpenSea token counterbid`, queueError);
@@ -14728,7 +14727,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
               removeOnComplete: true,
               removeOnFail: true
             });
-            }
+          }
         } catch (queueError: any) {
           errorLog('Queue', `Failed to process Blur trait counterbid`, queueError);
         }
@@ -14927,7 +14926,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
                   removeOnComplete: true,
                   removeOnFail: true
                 });
-                      counterbidsQueued++;
+                counterbidsQueued++;
               }
             } catch (queueError: any) {
               errorLog('Queue', `Failed to process Blur trait counterbid`, queueError);
@@ -14976,7 +14975,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
                   removeOnComplete: true,
                   removeOnFail: true
                 });
-                      counterbidsQueued++;
+                counterbidsQueued++;
               }
             } catch (queueError: any) {
               errorLog('Queue', `Failed to process Blur collection counterbid`, queueError);
@@ -17846,42 +17845,104 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         walletCache.getAllWallets(),
         fetchItemOffers(resolvedContractAddress, asset.tokenId.toString())
       ]);
-      const [topOffer, secondOffer] = highestBid;
 
-      const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal);
-      const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal);
-      const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
+      // Validate fetchItemOffers result with fallback to cached orders
+      if (!highestBid || highestBid.length === 0) {
+        // Check if we have existing cached orders as fallback (cached orders are always ours)
+        if (orders.length > 0 && orders[0].offerPrice) {
+          const cachedPriceEth = Number(orders[0].offerPrice) / Math.pow(10, decimal);
 
-      const owner = topOffer && typeof topOffer === 'object' ? topOffer.owner?.toLowerCase() : '';
-      const isOwnBid = walletsArr
-        .map(addr => addr.address.toLowerCase())
-        .includes(owner);
-
-      if (isOwnBid) {
-        // We own the top bid - apply spread optimization
-        const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
-        const spread = roundToValidPrecision(spreadRaw);
-        const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
-        const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
-
-        if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
-          // Large spread: lower our bid to just above second place
-          tokenOffer = BigInt(Math.round(roundToValidPrecision(potentialNewBidEth) * Math.pow(10, decimal)));
-        }
-        else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-          // Large spread but potential bid below min: keep current offer
-        }
-        else if (ttl > MIN_BID_DURATION) {
-          // Our bid is still valid with sufficient TTL
+          // Check if our existing bid is still valid
+          if (ttl > MIN_BID_DURATION) {
+            // Our bid is still active and valid - skip rebid
+            warnLog('BidFlow',
+              `[fetchItemOffers Failed] Existing bid still valid | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | cachedPrice=${cachedPriceEth} | ttl=${ttl}s`,
+              { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId, cachedOrderId: orders[0]._id, ttl }
+            );
+            return;
+          } else {
+            // Our bid expired - renew at same price (more competitive than minBid)
+            warnLog('BidFlow',
+              `[fetchItemOffers Failed] Renewing expired bid at cached price | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | cachedPrice=${cachedPriceEth} | ttl=${ttl}s`,
+              { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId, cachedOrderId: orders[0]._id, ttl }
+            );
+            tokenOffer = BigInt(Math.round(roundToValidPrecision(cachedPriceEth) * Math.pow(10, decimal)));
+          }
+          // Continue to bid placement below (don't skip outbid logic section)
         } else {
-          // Renew at same price
-          tokenOffer = BigInt(Math.round(roundToValidPrecision(highestBidAmount / Math.pow(10, decimal)) * Math.pow(10, decimal)));
+          // No fetchItemOffers data AND no cached orders - THROW ERROR (don't place blind bid)
+          errorLog('BidFlow',
+            `[fetchItemOffers + Cache Failed] Cannot place bid without market data | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | Retrying job...`,
+            undefined,
+            { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId }
+          );
+
+          // Throw error to trigger BullMQ retry - job will be retried when API recovers
+          throw new Error(`fetchItemOffers failed and no cached order available for ${slug} token ${asset.tokenId}`);
         }
-      }
-      else {
-        // Not our bid: outbid the current top bidder
-        const newBidEth = (highestBidAmount / Math.pow(10, decimal)) + outbidMargin;
-        tokenOffer = BigInt(Math.round(roundToValidPrecision(newBidEth) * Math.pow(10, decimal)));
+      } else {
+        const [topOffer, secondOffer] = highestBid;
+
+        // Validate topOffer has valid data
+        if (!topOffer || (topOffer.eth === 0 && topOffer.usd === 0)) {
+          errorLog('BidFlow',
+            `[Invalid TopOffer] API returned malformed data (zero values) | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | Retrying job...`,
+            undefined,
+            { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId, topOffer }
+          );
+
+          // Throw error - malformed API response should trigger retry, not blind minBid placement
+          throw new Error(`fetchItemOffers returned invalid data (zero values) for ${slug} token ${asset.tokenId}`);
+        } else {
+          const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal);
+
+          // Safety check for zero bid amount
+          if (highestBidAmount === 0) {
+            errorLog('BidFlow',
+              `[Zero HighestBid] Calculated bid amount is zero (malformed API data) | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | topOffer.eth=${topOffer.eth} | topOffer.usd=${topOffer.usd} | Retrying job...`,
+              undefined,
+              { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId, topOfferEth: topOffer.eth, topOfferUsd: topOffer.usd }
+            );
+
+            // Throw error - zero calculated bid indicates malformed data, should retry
+            throw new Error(`Calculated bid amount is zero for ${slug} token ${asset.tokenId} (topOffer.eth=${topOffer.eth}, topOffer.usd=${topOffer.usd})`);
+          } else {
+            const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal);
+            const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
+
+            const owner = topOffer && typeof topOffer === 'object' ? topOffer.owner?.toLowerCase() : '';
+            const isOwnBid = walletsArr
+              .map(addr => addr.address.toLowerCase())
+              .includes(owner);
+
+            if (isOwnBid) {
+              // We own the top bid - apply spread optimization
+              const spreadRaw = (Number(highestBidAmount) - Number(secondTopBidAmount)) / Math.pow(10, decimal);
+              const spread = roundToValidPrecision(spreadRaw);
+              const secondTopBidAmountEth = Number(secondTopBidAmount) / Math.pow(10, decimal);
+              const potentialNewBidEth = secondTopBidAmountEth + outbidMargin;
+
+              if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth >= minBidPriceEth) {
+                // Large spread: lower our bid to just above second place
+                tokenOffer = BigInt(Math.round(roundToValidPrecision(potentialNewBidEth) * Math.pow(10, decimal)));
+              }
+              else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
+                // Large spread but potential bid below min: keep current offer
+              }
+              else if (ttl > MIN_BID_DURATION) {
+                // Our bid is still valid with sufficient TTL
+              } else {
+                // Renew at same price
+                tokenOffer = BigInt(Math.round(roundToValidPrecision(highestBidAmount / Math.pow(10, decimal)) * Math.pow(10, decimal)));
+              }
+            }
+            else {
+              // Not our bid: outbid the current top bidder
+              const newBidEth = (highestBidAmount / Math.pow(10, decimal)) + outbidMargin;
+              tokenOffer = BigInt(Math.round(roundToValidPrecision(newBidEth) * Math.pow(10, decimal)));
+            }
+          }
+        }
       }
     }
 
@@ -17935,6 +17996,15 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     }
 
     const finalOfferEth = Number(tokenOffer) / Math.pow(10, decimal);
+
+    // Log bid decision context for debugging
+    if (Math.abs(finalOfferEth - minBidPriceEth) < 0.0001) {
+      warnLog('BidFlow',
+        `[MinBid Fallback] Placing bid at minimum price | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | minBid=${minBidPriceEth} | ` +
+        `This may indicate: (1) no existing offers, (2) fetchItemOffers failed, or (3) calculated bid below minimum`,
+        { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId, minBidPriceEth, finalOfferEth }
+      );
+    }
 
     try {
       await bidOnOpensea(

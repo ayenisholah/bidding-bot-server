@@ -93,8 +93,10 @@ const retryConfig: IAxiosRetryConfig = {
       return true; // Network errors
     }
     const status = error.response.status;
-    // Retry: rate limits (429/430), timeout (408), Cloudflare (520), gateway errors (502/504)
-    return status === 429 || status === 430 || status === 408 || status === 520 || status === 502 || status === 504;
+    // Retry: timeout (408), rate limits (429/430), server errors (500/503), gateway errors (502/504), Cloudflare (520)
+    return status === 408 || status === 429 || status === 430 ||
+           status === 500 || status === 502 || status === 503 ||
+           status === 504 || status === 520;
   },
   onRetry: (_retryCount, _error, _requestConfig) => {
     // Only log retries in development mode or for specific debugging

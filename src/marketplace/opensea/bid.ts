@@ -1636,49 +1636,61 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
       limit: 2
     }
   };
-  const itemOffers = await apiDedup(
-    `opensea-item-offers-${contractAddress.toLowerCase()}-${tokenId}`,
-    () => limiter.schedule(() => axiosInstance.post(
-      `${BASE_URL}/opensea/graphql`,
-      query,
-      {
-        headers: {
-          'content-type': 'application/json',
-          'x-api-key': API_KEY
+
+  try {
+    // Direct call without deduplication - token offers change with every bid (fresh data required)
+    const itemOffers = await limiter.schedule(() =>
+      axiosInstance.post(
+        `${BASE_URL}/opensea/graphql`,
+        query,
+        {
+          headers: {
+            'content-type': 'application/json',
+            'x-api-key': API_KEY
+          }
         }
-      }
-    )),
-    { category: 'OpenSea' }
-  );
+      )
+    );
 
-  // Default offer structure
-  const defaultOffer = {
-    amount: 0,
-    owner: '0x0000000000000000000000000000000000000000',
-    currency: 'WETH',
-    usd: 0,
-    decimal: 18,
-    eth: 0
-  };
+    // Validate response structure
+    const responseData = (itemOffers.data) as unknown as GraphQLItemOfferResponse;
+    if (!responseData?.data?.itemOffers?.items) {
+      warnLog('ItemOffers', `Invalid response structure | contract=${contractAddress} | token=${tokenId}`);
+      return null;
+    }
 
-  const order = ((itemOffers.data) as unknown as GraphQLItemOfferResponse)?.data?.itemOffers?.items
-    ?.filter((offer) => offer && new Date(offer?.endTime).getTime() > Date.now()) // remove expired offers
-    .map((offer) => ({
-      amount: offer?.pricePerItem?.token?.unit || 0,
-      owner: offer?.maker?.address || '0x0000000000000000000000000000000000000000',
-      currency: offer?.pricePerItem?.token?.symbol?.toUpperCase() || 'WETH',
-      usd: offer?.pricePerItem?.usd || 0,
-      decimal: offer?.pricePerItem?.token?.symbol?.toUpperCase() === "WETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "ETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "BETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "USDC" ? 6 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "USDT" ? 6 : 18,
-      eth: offer?.pricePerItem?.token?.unit || 0
-    })) || []
+    const order = responseData.data.itemOffers.items
+      ?.filter((offer) => offer && new Date(offer?.endTime).getTime() > Date.now()) // remove expired offers
+      .map((offer) => ({
+        amount: offer?.pricePerItem?.token?.unit || 0,
+        owner: offer?.maker?.address || '0x0000000000000000000000000000000000000000',
+        currency: offer?.pricePerItem?.token?.symbol?.toUpperCase() || 'WETH',
+        usd: offer?.pricePerItem?.usd || 0,
+        decimal: offer?.pricePerItem?.token?.symbol?.toUpperCase() === "WETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "ETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "BETH" ? 18 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "USDC" ? 6 : offer?.pricePerItem?.token?.symbol?.toUpperCase() === "USDT" ? 6 : 18,
+        eth: offer?.pricePerItem?.token?.unit || 0
+      })) || [];
 
-  // Ensure we always return at least 2 offers
-  if (order.length === 0) {
-    return [defaultOffer, defaultOffer];
-  } else if (order.length === 1) {
-    return [order[0], defaultOffer];
+    if (order.length === 0) {
+      warnLog('ItemOffers', `No valid offers found | contract=${contractAddress} | token=${tokenId}`);
+      return null;
+    } else if (order.length === 1) {
+      // Default offer structure for second offer
+      const defaultOffer = {
+        amount: 0,
+        owner: '0x0000000000000000000000000000000000000000',
+        currency: 'WETH',
+        usd: 0,
+        decimal: 18,
+        eth: 0
+      };
+      return [order[0], defaultOffer];
+    }
+    return order;
+
+  } catch (error) {
+    errorLog('ItemOffers', `Failed to fetch | contract=${contractAddress} | token=${tokenId}`, error);
+    return null;
   }
-  return order
 }
 
 export async function fetchOpenseaOffers(
