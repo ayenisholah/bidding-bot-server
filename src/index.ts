@@ -1764,7 +1764,7 @@ async function checkWorkerHealth() {
 
     // Check all workers
     workers.forEach((worker, index) => {
-      try{
+      try {
         workerStatuses.push({
           index: index,
           name: `worker-${index}`,
@@ -2173,7 +2173,7 @@ async function startServer() {
      */
     async function createWorker(index: number): Promise<Worker> {
       // Calculate concurrency for this worker (distribute remainder across first workers)
-      const workerConcurrency = RATE_LIMIT_NUM
+      const workerConcurrency = RATE_LIMIT_NUM * 10
 
       const workerConnection = await createBullMQConnection(`worker-${index}`);
       bullMQConnections.push(workerConnection);
@@ -12627,7 +12627,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 removeOnComplete: true,
                 removeOnFail: true
               });
-                }
+            }
           } catch (queueError: any) {
             errorLog('Queue', `Failed to process MagicEden trait counterbid`, queueError);
           }
@@ -12728,7 +12728,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                     removeOnFail: true
                   }
                 );
-                      tokenCounterbidsQueued++;
+                tokenCounterbidsQueued++;
               }
             } catch (queueError: any) {
               errorLog('Queue', `Failed to process MagicEden token counterbid`, queueError);
@@ -12912,7 +12912,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 removeOnComplete: true,
                 removeOnFail: true
               });
-                  counterbidsQueued++;
+              counterbidsQueued++;
               ordersToCancel.push(order);
             } catch (queueError: any) {
               if (!queueError?.message?.includes('Job with this id already exists')) {
@@ -12968,7 +12968,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                     removeOnFail: true
                   }
                 );
-                      counterbidsQueued++;
+                counterbidsQueued++;
                 ordersToCancel.push(order);
               }
             } catch (queueError: any) {
@@ -13026,7 +13026,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                     removeOnFail: true
                   }
                 );
-                      counterbidsQueued++;
+                counterbidsQueued++;
                 ordersToCancel.push(order);
               }
             } catch (queueError: any) {
@@ -13122,7 +13122,7 @@ async function handleMagicEdenCounterbid(data: any, task: ITask, receivedAt: num
                 removeOnComplete: true,
                 removeOnFail: true
               });
-                  tokenCollectionCounterbidsQueued++;
+              tokenCollectionCounterbidsQueued++;
             } catch (queueError: any) {
               // Ignore duplicate job errors - this is expected with deterministic jobIds
               if (queueError?.message?.includes('Job with this id already exists')) {
@@ -13852,7 +13852,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                       removeOnFail: true
                     }
                   );
-                          tokenCounterbidsQueued++;
+                  tokenCounterbidsQueued++;
                 }
               }).catch((queueError: any) => {
                 errorLog('Queue', `Failed to process OpenSea token counterbid`, queueError);
@@ -13916,7 +13916,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                   removeOnFail: true
                 }
               );
-                }
+            }
           } catch (queueError: any) {
             errorLog('Queue', `Failed to process OpenSea trait counterbid`, queueError);
           }
@@ -14249,7 +14249,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                   removeOnFail: true
                 }
               );
-                  counterbidsQueued++;
+              counterbidsQueued++;
             } catch (queueError: any) {
               if (!queueError?.message?.includes('Job with this id already exists')) {
                 errorLog('Queue', `Failed to queue OpenSea trait counterbid`, queueError);
@@ -14308,7 +14308,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                     removeOnFail: true
                   }
                 );
-                      counterbidsQueued++;
+                counterbidsQueued++;
               }
             } catch (queueError: any) {
               errorLog('Queue', `Failed to process OpenSea collection counterbid`, queueError);
@@ -14366,7 +14366,7 @@ async function handleOpenseaCounterbid(data: any, task: ITask, receivedAt: numbe
                     removeOnFail: true
                   }
                 );
-                      counterbidsQueued++;
+                counterbidsQueued++;
               }
             } catch (queueError: any) {
               errorLog('Queue', `Failed to process OpenSea token counterbid`, queueError);
@@ -14728,7 +14728,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
               removeOnComplete: true,
               removeOnFail: true
             });
-            }
+          }
         } catch (queueError: any) {
           errorLog('Queue', `Failed to process Blur trait counterbid`, queueError);
         }
@@ -14927,7 +14927,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
                   removeOnComplete: true,
                   removeOnFail: true
                 });
-                      counterbidsQueued++;
+                counterbidsQueued++;
               }
             } catch (queueError: any) {
               errorLog('Queue', `Failed to process Blur trait counterbid`, queueError);
@@ -14976,7 +14976,7 @@ async function handleBlurCounterbid(data: any, task: ITask, receivedAt: number) 
                   removeOnComplete: true,
                   removeOnFail: true
                 });
-                      counterbidsQueued++;
+                counterbidsQueued++;
               }
             } catch (queueError: any) {
               errorLog('Queue', `Failed to process Blur collection counterbid`, queueError);

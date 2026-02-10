@@ -111,10 +111,6 @@ async function initialize(rateLimit: number) {
   limiter = new Bottleneck({
     minTime: 1000 / concurrency, // Minimum time between job starts
     trackDoneStatus: true,
-    // Reservoir system to maintain steady job flow and prevent queue drain
-    // reservoir: rateLimit * 3, // Initial reservoir: 3x rate limit for buffer
-    // reservoirRefreshAmount: rateLimit * 1.5, // Aggressive refill: 1.5x rate limit per second
-    // reservoirRefreshInterval: 1000, // Refill every 1 second to maintain constant flow
   });
 
   axiosRetry(axiosInstance, retryConfig);
