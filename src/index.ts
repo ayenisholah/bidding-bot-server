@@ -17860,40 +17860,17 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         fetchItemOffers(resolvedContractAddress, asset.tokenId.toString())
       ]);
 
-      // Validate fetchItemOffers result with fallback to cached orders
+      // Validate fetchItemOffers result - throw error immediately if failed
       if (!highestBid || highestBid.length === 0) {
-        // Check if we have existing cached orders as fallback (cached orders are always ours)
-        if (orders.length > 0 && orders[0].offerPrice) {
-          const cachedPriceEth = Number(orders[0].offerPrice) / Math.pow(10, decimal);
+        // fetchItemOffers failed - THROW ERROR IMMEDIATELY (no cached order fallback for placing bids)
+        errorLog('BidFlow',
+          `[fetchItemOffers Failed] Cannot place bid without real-time market data | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | Retrying job...`,
+          undefined,
+          { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId }
+        );
 
-          // Check if our existing bid is still valid
-          if (ttl > MIN_BID_DURATION) {
-            // Our bid is still active and valid - skip rebid
-            warnLog('BidFlow',
-              `[fetchItemOffers Failed] Existing bid still valid | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | cachedPrice=${cachedPriceEth} | ttl=${ttl}s`,
-              { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId, cachedOrderId: orders[0].orderHash, ttl }
-            );
-            return;
-          } else {
-            // Our bid expired - renew at same price (more competitive than minBid)
-            warnLog('BidFlow',
-              `[fetchItemOffers Failed] Renewing expired bid at cached price | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | cachedPrice=${cachedPriceEth} | ttl=${ttl}s`,
-              { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId, cachedOrderId: orders[0].orderHash, ttl }
-            );
-            tokenOffer = BigInt(Math.round(roundToValidPrecision(cachedPriceEth) * Math.pow(10, decimal)));
-          }
-          // Continue to bid placement below (don't skip outbid logic section)
-        } else {
-          // No fetchItemOffers data AND no cached orders - THROW ERROR (don't place blind bid)
-          errorLog('BidFlow',
-            `[fetchItemOffers + Cache Failed] Cannot place bid without market data | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | Retrying job...`,
-            undefined,
-            { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId }
-          );
-
-          // Throw error to trigger BullMQ retry - job will be retried when API recovers
-          throw new Error(`fetchItemOffers failed and no cached order available for ${slug} token ${asset.tokenId}`);
-        }
+        // Throw error to trigger BullMQ retry - job will retry when API recovers
+        throw new Error(`fetchItemOffers failed for ${slug} token ${asset.tokenId} - retrying until API recovers`);
       } else {
         const [topOffer, secondOffer] = highestBid;
 
