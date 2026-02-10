@@ -737,7 +737,6 @@ export async function bidOnOpensea(
           // Place new bid immediately (appends to array, no auto-cancellation)
           // Multiple orders per identifier are now supported
           await orderCache.set({
-            _id: uuidv4(),
             orderHash: itemOrderHash,
             expiresAt: expiresAt,
             offerPrice: offerPrice.toString(),
@@ -1089,7 +1088,6 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     // Place new bid immediately (appends to array, no auto-cancellation)
     // Multiple orders per identifier are now supported
     await orderCache.set({
-      _id: orderCache.generateOrderId(),
       orderHash: order_hash,
       expiresAt: expiresAt,
       offerPrice: offerPrice.toString(),
@@ -1431,14 +1429,10 @@ async function postItemOffer(taskId: string, offer: unknown, signature: string, 
               );
             }
 
-            // REDIS CACHE SAVE log
-            const orderId = orderCache.generateOrderId();
-
             // Sync cache with OpenSea's truth (NO cancellation - this is recovery)
             const expiresAtTimestamp = expiresAt.getTime();
             const createdAt = Date.now();
             await orderCache.set({
-              _id: orderId,
               orderHash: existingOffer.orderHash,
               expiresAt: expiresAtTimestamp,
               offerPrice: offerPriceEth.toString(),

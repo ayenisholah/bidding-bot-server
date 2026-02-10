@@ -825,7 +825,6 @@ async function submitBidToBlur(
         // Place new bid immediately (appends to array, no auto-cancellation)
         // Multiple orders per identifier are now supported
         await orderCache.set({
-          _id: orderCache.generateOrderId(),
           orderHash: JSON.stringify(cancelPayload),
           expiresAt: expiresAt,
           offerPrice: offer_price.toString(),

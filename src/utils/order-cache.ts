@@ -1,10 +1,8 @@
-import { v4 as uuidv4 } from 'uuid';
 import { LRUCache } from 'lru-cache';
 import { errorLog, warnLog} from './debug-file-logger';
 import { queue, CANCEL_OPENSEA_BID, CANCEL_BLUR_BID, CANCEL_MAGICEDEN_BID } from '../index';
 
 export interface CachedOrder {
-  _id: string;
   orderHash: string;
   expiresAt: number; // timestamp in ms
   offerPrice: string; // wei
@@ -46,6 +44,7 @@ interface CacheStats {
 const stats = {
   lru: { hits: 0, misses: 0 } as CacheStats,
   replacements: { total: 0, cancelled: 0, failed: 0 },
+  deletions: { attempted: 0, succeeded: 0, failed: 0 },
   startTime: Date.now()
 };
 
@@ -76,6 +75,14 @@ export function getOrderCacheStats() {
         ? `${((stats.replacements.cancelled / stats.replacements.total) * 100).toFixed(1)}%`
         : 'N/A'
     },
+    deletions: {
+      attempted: stats.deletions.attempted,
+      succeeded: stats.deletions.succeeded,
+      failed: stats.deletions.failed,
+      successRate: stats.deletions.attempted > 0
+        ? `${((stats.deletions.succeeded / stats.deletions.attempted) * 100).toFixed(1)}%`
+        : 'N/A'
+    },
     uptime: `${uptime}min`
   };
 }
@@ -89,6 +96,9 @@ export function resetOrderCacheStats() {
   stats.replacements.total = 0;
   stats.replacements.cancelled = 0;
   stats.replacements.failed = 0;
+  stats.deletions.attempted = 0;
+  stats.deletions.succeeded = 0;
+  stats.deletions.failed = 0;
   stats.startTime = Date.now();
 }
 
@@ -113,7 +123,6 @@ export async function queueReplacedOrderCancellation(
     marketplace: string;
     identifier?: string;
     slug?: string;
-    _id?: string;
     reason?: string;
   },
   reason?: string
@@ -144,13 +153,14 @@ export async function queueReplacedOrderCancellation(
       {
         taskId: oldOrder.taskId,
         orderHash: oldOrder.orderHash,
-        orderId: oldOrder._id || '',
+        orderId: oldOrder.orderHash,
         slug: oldOrder.slug || '',
         marketplace: oldOrder.marketplace,
+        identifier: oldOrder.identifier,
         reason: cancelReason
       },
       {
-        jobId: `cancel-${oldOrder._id || oldOrder.orderHash}-${Date.now()}`,
+        jobId: `cancel-${oldOrder.orderHash}-${Date.now()}`,
         priority: 1 // Medium priority (after counterbids, before scheduled bids)
       }
     );
@@ -193,12 +203,6 @@ class OrderCache {
     return orderLRU.size;
   }
 
-  /**
-   * Generate a new order ID (replaces MongoDB ObjectId)
-   */
-  generateOrderId(): string {
-    return uuidv4();
-  }
 
   /**
    * Set/update an order in cache (sync, LRU only)
@@ -208,8 +212,8 @@ class OrderCache {
     const lruKey = this.getLruKey(order.taskId, order.marketplace, order.identifier);
     const existing = orderLRU.get(lruKey) || [];
 
-    // Check if order already exists (by _id or orderHash) to prevent duplicates
-    const isDuplicate = existing.some(o => o._id === order._id || o.orderHash === order.orderHash);
+    // Check if order already exists (by orderHash) to prevent duplicates
+    const isDuplicate = existing.some(o => o.orderHash === order.orderHash);
     if (!isDuplicate) {
       existing.push(order);
       // Sort newest first (for getNewest() helper)
@@ -302,7 +306,10 @@ class OrderCache {
    * Useful for selective cancellation
    */
   deleteOne(taskId: string, marketplace: string, identifier: string, orderHash: string): boolean {
+    stats.deletions.attempted++;
+
     if (isProtectedTask(taskId)) {
+      stats.deletions.failed++;
       return false;
     }
 
@@ -310,12 +317,14 @@ class OrderCache {
     const existing = orderLRU.get(lruKey);
 
     if (!existing) {
+      stats.deletions.failed++;
       return false;
     }
 
     const filtered = existing.filter(order => order.orderHash !== orderHash);
 
     if (filtered.length === existing.length) {
+      stats.deletions.failed++;
       return false; // Not found
     }
 
@@ -325,31 +334,10 @@ class OrderCache {
       orderLRU.set(lruKey, filtered);
     }
 
+    stats.deletions.succeeded++;
     return true;
   }
 
-  /**
-   * Delete order by order ID (O(n) scan)
-   * Rarely called - only from cancellation callbacks
-   * IMPORTANT: Scans arrays for matching order
-   */
-  deleteById(orderId: string): boolean {
-    for (const [lruKey, orders] of orderLRU.entries()) {
-      const index = orders.findIndex(o => o._id === orderId);
-      if (index !== -1) {
-        orders.splice(index, 1);
-
-        if (orders.length === 0) {
-          orderLRU.delete(lruKey); // No orders left
-        } else {
-          orderLRU.set(lruKey, orders); // Update array
-        }
-
-        return true;
-      }
-    }
-    return false;
-  }
 
   /**
    * Get all active (non-expired) orders for a task

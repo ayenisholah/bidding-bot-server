@@ -214,7 +214,6 @@ export async function cleanupMagicEden() {
       // Multiple orders per identifier are now supported
       const createdAt = Date.now();
       const cachedOrders = batch.map(order => ({
-        _id: orderCache.generateOrderId(),
         orderHash: order.orderHash,
         expiresAt: order.expiresAt instanceof Date ? order.expiresAt.getTime() : order.expiresAt,
         offerPrice: order.offerPrice,
@@ -943,7 +942,6 @@ async function sendSignedOrderData(
           // Multiple orders per identifier are now supported
           const createdAt = Date.now();
           const cachedOrders = batch.map(order => ({
-            _id: orderCache.generateOrderId(),
             orderHash: order.orderHash,
             expiresAt: order.expiresAt instanceof Date ? order.expiresAt.getTime() : order.expiresAt,
             offerPrice: order.offerPrice,
@@ -982,7 +980,6 @@ async function sendSignedOrderData(
               // Multiple orders per identifier are now supported
               const createdAt = Date.now();
               const cachedOrders = batch.map(order => ({
-                _id: orderCache.generateOrderId(),
                 orderHash: order.orderHash,
                 expiresAt: order.expiresAt instanceof Date ? order.expiresAt.getTime() : order.expiresAt,
                 offerPrice: order.offerPrice,
