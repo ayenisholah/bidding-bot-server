@@ -9,11 +9,11 @@
  *
  * Run with: npx ts-node src/scripts/test-priority-ordering.ts
  */
-import Bottleneck from 'bottleneck';
+import { PreciseRateLimiter } from '../utils/precise-rate-limiter';
 
 const RATE_LIMIT = 100;
 const MIN_TIME = 10; // 10ms = 100 RPS
-const MAX_CONCURRENT = Math.ceil(RATE_LIMIT * 2); // 200
+const MAX_CONCURRENT = Math.ceil(RATE_LIMIT * 5); // 500
 const SIMULATED_LATENCY = 1000; // 1000ms average API latency
 
 interface JobRecord {
@@ -39,7 +39,7 @@ async function testFullPriorityOrdering(): Promise<boolean> {
   console.log('\n=== FULL PRIORITY LEVEL ORDERING TEST ===');
   console.log(`Config: minTime=${MIN_TIME}, maxConcurrent=${MAX_CONCURRENT}, latency=${SIMULATED_LATENCY}ms`);
 
-  const limiter = new Bottleneck({
+  const limiter = new PreciseRateLimiter({
     minTime: MIN_TIME,
     maxConcurrent: MAX_CONCURRENT,
     trackDoneStatus: true,
@@ -129,14 +129,11 @@ async function testFullPriorityOrdering(): Promise<boolean> {
     }
   }
 
-  // With maxConcurrent=200 and only 30 total jobs (6 levels × 5 jobs), all jobs
-  // fit within the 200 slots. They dispatch from RECEIVED state in FIFO order
-  // (priority only applies to QUEUED jobs when slots are full).
-  // With sentinel holding 1 slot, 199 remaining can absorb all 30 queued jobs.
-  // Allow up to 15 violations (FIFO dispatch when slots are available).
-  const passed = orderingCorrect || violations.length <= 15;
+  // With PreciseRateLimiter, priority ordering is always enforced via the min-heap.
+  // All queued jobs are sorted by priority regardless of maxConcurrent.
+  const passed = orderingCorrect;
   console.log(`\nOrdering correct: ${orderingCorrect}`);
-  console.log(`Violations: ${violations.length} (max 15 tolerated — slots available, FIFO expected)`);
+  console.log(`Violations: ${violations.length}`);
   console.log(`RESULT: ${passed ? 'PASS' : 'FAIL'}`);
 
   if (violations.length > 0) {
@@ -164,7 +161,7 @@ async function testCounterbidCancelLatency(): Promise<boolean> {
   console.log('\n=== COUNTERBID + CANCEL CO-SCHEDULING TEST ===');
   console.log(`Config: minTime=${MIN_TIME}, maxConcurrent=${MAX_CONCURRENT}, latency=${SIMULATED_LATENCY}ms`);
 
-  const limiter = new Bottleneck({
+  const limiter = new PreciseRateLimiter({
     minTime: MIN_TIME,
     maxConcurrent: MAX_CONCURRENT,
     trackDoneStatus: true,
@@ -285,9 +282,7 @@ async function testCounterbidCancelLatency(): Promise<boolean> {
   );
   console.log(`Priority-5 jobs after both p0 jobs: ${p5AfterCancel}/${QUEUE_FILL}`);
 
-  // With maxConcurrent=200 and only 52 total jobs (50 fill + 2 p0), all jobs fit
-  // within the 200 slots. Jobs dispatch from RECEIVED state in FIFO order.
-  // The counterbid/cancel latency measures enqueue-to-dispatch including sentinel wait.
+  // With PreciseRateLimiter, priority-0 jobs jump ahead of queued priority-5 jobs.
   const TARGET_LATENCY_MS = 1000;
   const bidLatencyOk = bidRecord.latencyMs < TARGET_LATENCY_MS;
   const cancelLatencyOk = cancelRecord.latencyMs < TARGET_LATENCY_MS;
@@ -296,10 +291,8 @@ async function testCounterbidCancelLatency(): Promise<boolean> {
   const spacingOk = p50 >= 8 && p50 <= 14;
   const spacingP99Ok = p99 < 250;
   const burstOk = maxBurst <= 12;
-  // With maxConcurrent=200 and only 52 jobs, all fit in slots.
-  // Priority doesn't activate, so FIFO order is expected.
-  // Allow all 50 fill jobs to run before p0 jobs.
-  const orderOk = true; // With slots available, FIFO is expected
+  // With PreciseRateLimiter, p0 jobs jump ahead of queued p5 jobs
+  const orderOk = p5AfterCancel >= 20; // At least 20 fill jobs after p0 jobs
 
   const passed = bidLatencyOk && cancelLatencyOk && orderOk;
 
@@ -347,7 +340,7 @@ async function testProductionConfigValidation(): Promise<void> {
   console.log(`\n=== VALIDATION: PRODUCTION CONFIG (maxConcurrent=${MAX_CONCURRENT}, ${SIMULATED_LATENCY}ms latency) ===`);
   console.log('This test validates the current production config supports priority under heavy load.');
 
-  const limiter = new Bottleneck({
+  const limiter = new PreciseRateLimiter({
     minTime: MIN_TIME,
     maxConcurrent: MAX_CONCURRENT,
     trackDoneStatus: true,
@@ -422,12 +415,9 @@ async function testProductionConfigValidation(): Promise<void> {
   console.log(`Cancel latency: ${cancelRecord.latencyMs.toFixed(1)}ms`);
   console.log(`Fill jobs before counterbid: ${fillBeforeBid} | after: ${fillAfterBid}`);
 
-  // With 400 fill jobs, 2500ms wait, 200 maxConcurrent, 1000ms latency:
-  // ~250 fill jobs dispatched in 2500ms, ~200 in-flight, ~50 completed
-  // ~150 fill jobs still QUEUED when counterbid arrives
-  // Priority should kick in: counterbid (p0) jumps ahead of ~150 QUEUED p5 jobs
-  // So counterbid should appear before position ~260 (250 already dispatched + a few more)
-  // And there should be fill jobs AFTER the counterbid (the ones it jumped ahead of)
+  // With PreciseRateLimiter, priority always works (min-heap ordering).
+  // After 2500ms at 10ms spacing, ~250 dispatched. ~150 still queued.
+  // Priority-0 counterbid jumps ahead of queued p5 jobs.
   const priorityWorking = fillAfterBid >= 50; // At least 50 fill jobs ran after counterbid
 
   results.push({
@@ -449,7 +439,7 @@ async function testProductionConfigValidation(): Promise<void> {
 // MAIN
 // ============================================
 async function main() {
-  console.log('Priority Ordering Test Suite');
+  console.log('Priority Ordering Test Suite (PreciseRateLimiter)');
   console.log(`Limiter: minTime=${MIN_TIME}ms (${1000 / MIN_TIME} RPS), maxConcurrent=${MAX_CONCURRENT}`);
   console.log('='.repeat(60));
 
@@ -478,10 +468,10 @@ async function main() {
   const allPassed = results.every((r) => r.passed);
 
   console.log('\n' + '='.repeat(60));
-  console.log('PRODUCTION CONFIG:');
-  console.log(`  maxConcurrent = ceil(rateLimit * 2) = ${MAX_CONCURRENT}`);
-  console.log(`  Supports full throughput at ${SIMULATED_LATENCY}ms latency AND priority under heavy load.`);
-  console.log(`  Priority activates when all ${MAX_CONCURRENT} slots are occupied (>200 in-flight).`);
+  console.log('PRODUCTION CONFIG (PreciseRateLimiter):');
+  console.log(`  maxConcurrent = ceil(rateLimit * 5) = ${MAX_CONCURRENT}`);
+  console.log(`  Supports full throughput at ${SIMULATED_LATENCY}ms latency AND priority via min-heap.`);
+  console.log(`  Priority always works: min-heap ensures p0 jobs jump ahead of queued p5 jobs.`);
   console.log('='.repeat(60));
 
   console.log(

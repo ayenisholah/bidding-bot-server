@@ -1,9 +1,9 @@
-import Bottleneck from "bottleneck";
 import axios, { AxiosInstance } from "axios";
 import { config } from "dotenv";
 import { RATE_LIMIT, rps } from ".";
 import { wrapAxiosInstance, jobContext } from "./utils/axios-wrapper";
 import { warnLog, errorLog } from "./utils/debug-file-logger";
+import { PreciseRateLimiter } from "./utils/precise-rate-limiter";
 
 config()
 
@@ -11,7 +11,7 @@ config()
 const DEBUG = process.env.DEBUG === 'true';
 export const DEBUG_VERBOSE = process.env.DEBUG_VERBOSE === 'true';
 
-let limiter: Bottleneck;
+let limiter: PreciseRateLimiter;
 let axiosInstance: AxiosInstance;
 let countLoggerInterval: NodeJS.Timeout | null = null;
 let previousDoneCount = 0;
@@ -91,8 +91,8 @@ function calculateRetryDelay(retryCount: number, error: any): number {
     return baseDelay + jitter;
   }
 
-  // Default exponential backoff
-  return Math.pow(2, retryCount) * 1000;
+  // Default exponential backoff, capped at 2000ms
+  return Math.min(Math.pow(2, retryCount) * 1000, 2000);
 }
 
 async function initialize(rateLimit: number) {
@@ -102,18 +102,16 @@ async function initialize(rateLimit: number) {
 
   axiosInstance = axios.create({ timeout: 30000 });
 
-  // Constant-rate limiter: exactly 1 request per (1000/rateLimit) ms
-  // e.g. RATE_LIMIT=100 → minTime=10ms → 100 RPS, no bursts
+  // PreciseRateLimiter: exactly 1 request per (1000/rateLimit) ms using hrtime precision
+  // e.g. RATE_LIMIT=100 → minTime=10ms → 100 RPS, exact spacing via spin-wait
   //
   // maxConcurrent = max HTTP requests in-flight simultaneously.
   // Must be >= rateLimit * (avgApiLatency / 1000) to sustain full throughput.
-  // Real marketplace latencies: ~1000ms avg, spikes to 2000ms, 1-5% timeout at 10s.
-  // rateLimit * 2 = 200 at rateLimit=100: handles 2000ms avg with headroom.
-  // Priority still works: when all 200 slots are occupied (heavy load/spike),
-  // highest-priority QUEUED job gets the next free slot.
-  limiter = new Bottleneck({
+  // rateLimit * 5 = 500 at rateLimit=100: handles 5s avg latency with headroom.
+  // Retries free slots immediately (unlike Bottleneck), so less capacity wasted.
+  limiter = new PreciseRateLimiter({
     minTime: 1000 / rateLimit,
-    maxConcurrent: Math.ceil(rateLimit * 2), // 200 at rateLimit=100
+    maxConcurrent: Math.ceil(rateLimit * 5), // 500 at rateLimit=100
     trackDoneStatus: true,
   });
 
@@ -364,7 +362,8 @@ setInterval(() => {
   const averageRPS = nonZeroRpsHistory.length > 0
     ? nonZeroRpsHistory.reduce((sum, val) => sum + val, 0) / nonZeroRpsHistory.length
     : 0;
-  trueRPS = Math.min(RATE_LIMIT, Math.max(executing, averageRPS));
+  // Use actual measured RPS, not inflated by queue depth
+  trueRPS = Math.min(RATE_LIMIT, averageRPS);
 
   rps.currentRPS = trueRPS
 

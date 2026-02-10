@@ -1,20 +1,20 @@
 /**
  * Rate Pacing Test
  *
- * Verifies Bottleneck limiter produces correct spacing at 100 RPS
+ * Verifies PreciseRateLimiter produces correct spacing at 100 RPS
  * and tests priority ordering behavior.
  *
- * CRITICAL FINDING: Bottleneck priority requires maxConcurrent to be set.
- * Without maxConcurrent, all jobs stay in RECEIVED state and dispatch FIFO.
- * Priority sorting only applies to jobs in QUEUED state, which requires
- * maxConcurrent to gate admission.
+ * PreciseRateLimiter always enforces priority via min-heap, regardless
+ * of maxConcurrent setting. This is an improvement over Bottleneck which
+ * required maxConcurrent for priority to take effect.
  *
  * Run with: npx ts-node src/scripts/test-rate-pacing.ts
  */
-import Bottleneck from 'bottleneck';
+import { PreciseRateLimiter } from '../utils/precise-rate-limiter';
 
 const RATE_LIMIT = 100;
 const MIN_TIME = 1000 / RATE_LIMIT; // 10ms
+const MAX_CONCURRENT = Math.ceil(RATE_LIMIT * 5); // 500 (production config)
 
 interface TestResult {
   name: string;
@@ -28,8 +28,9 @@ const results: TestResult[] = [];
 // TEST 1: Spacing Test
 // ============================================
 async function testSpacing(): Promise<{ passed: boolean; timestamps: number[] }> {
-  const limiter = new Bottleneck({
+  const limiter = new PreciseRateLimiter({
     minTime: MIN_TIME,
+    maxConcurrent: MAX_CONCURRENT,
     trackDoneStatus: true,
   });
 
@@ -141,17 +142,16 @@ function testBurstDetection(timestamps: number[]): boolean {
 }
 
 // ============================================
-// TEST 3a: Priority Ordering - Production Config (minTime only)
+// TEST 3a: Priority Ordering - Instant Jobs (no latency)
 // ============================================
-async function testPriorityProductionConfig(): Promise<boolean> {
-  console.log('\n=== PRIORITY TEST: PRODUCTION CONFIG (minTime only, no maxConcurrent) ===');
-  console.log('NOTE: This test documents that priority does NOT work without maxConcurrent.');
-  console.log('Bottleneck dispatches from RECEIVED in FIFO order; priority only applies to QUEUED.');
+async function testPriorityInstantJobs(): Promise<boolean> {
+  console.log('\n=== PRIORITY TEST: INSTANT JOBS (no latency) ===');
+  console.log('PreciseRateLimiter always enforces priority via min-heap.');
 
-  const limiter = new Bottleneck({
+  const limiter = new PreciseRateLimiter({
     minTime: 10,
+    maxConcurrent: MAX_CONCURRENT,
     trackDoneStatus: true,
-    // No maxConcurrent -- matches current production init.ts config
   });
 
   const executionLog: { label: string; priority: number; index: number }[] = [];
@@ -183,7 +183,7 @@ async function testPriorityProductionConfig(): Promise<boolean> {
     })
   );
 
-  // Release sentinel
+  // Release sentinel -- jobs should drain in priority order (high first)
   releaseSentinel!();
   await blockerPromise;
   await Promise.all([...lowPriorityPromises, ...highPriorityPromises]);
@@ -202,40 +202,35 @@ async function testPriorityProductionConfig(): Promise<boolean> {
       .join(', ')}`
   );
 
-  // This test EXPECTS priority to NOT work without maxConcurrent
-  // With no maxConcurrent, ALL low-pri jobs run before high-pri (pure FIFO)
-  const priorityBroken = lowBeforeFirstHigh.length > 10;
+  // PreciseRateLimiter uses min-heap: high-pri (0) should execute before low-pri (5)
+  // Allow at most 2 low-pri jobs to sneak through due to timing
+  const passed = lowBeforeFirstHigh.length <= 2 && highEntries.length === 10;
 
-  console.log(
-    `RESULT: ${priorityBroken ? 'CONFIRMED -- priority NOT working (expected)' : 'UNEXPECTED -- priority IS working'}`
-  );
+  console.log(`RESULT: ${passed ? 'PASS' : 'FAIL'}`);
 
   results.push({
-    name: 'Priority: production config (no maxConcurrent)',
-    passed: true, // This is an informational test, always passes
+    name: 'Priority: instant jobs (high-pri before low-pri)',
+    passed,
     details: [
-      `FINDING: ${lowBeforeFirstHigh.length}/50 low-pri jobs ran before high-pri`,
-      priorityBroken
-        ? 'CONFIRMED: priority has no effect without maxConcurrent'
-        : 'UNEXPECTED: priority worked without maxConcurrent',
-      'ACTION REQUIRED: Add maxConcurrent:1 to production limiter for priority support',
+      `${lowBeforeFirstHigh.length} low-pri jobs ran before first high-pri (max 2 allowed)`,
+      `${highEntries.length}/10 high-pri jobs executed`,
+      'PreciseRateLimiter always enforces priority via min-heap',
     ],
   });
 
-  return !priorityBroken; // Returns false when priority is broken (expected)
+  return passed;
 }
 
 // ============================================
-// TEST 3b: Priority Ordering - With maxConcurrent=200 (production config)
+// TEST 3b: Priority Ordering - With Simulated Latency (production-like)
 // ============================================
-async function testPriorityWithMaxConcurrent(): Promise<boolean> {
-  const MC = Math.ceil(RATE_LIMIT * 2); // 200
-  console.log(`\n=== PRIORITY TEST: WITH maxConcurrent=${MC} (production config) ===`);
+async function testPriorityWithLatency(): Promise<boolean> {
+  console.log(`\n=== PRIORITY TEST: WITH LATENCY (maxConcurrent=${MAX_CONCURRENT}) ===`);
   console.log('Includes 1000ms simulated latency for realistic conditions.');
 
-  const limiter = new Bottleneck({
+  const limiter = new PreciseRateLimiter({
     minTime: 10,
-    maxConcurrent: MC,
+    maxConcurrent: MAX_CONCURRENT,
     trackDoneStatus: true,
   });
 
@@ -269,7 +264,7 @@ async function testPriorityWithMaxConcurrent(): Promise<boolean> {
     })
   );
 
-  // Release sentinel -- jobs should now drain in priority order
+  // Release sentinel -- jobs should drain in priority order
   releaseSentinel!();
   await blockerPromise;
   await Promise.all([...lowPriorityPromises, ...highPriorityPromises]);
@@ -290,26 +285,20 @@ async function testPriorityWithMaxConcurrent(): Promise<boolean> {
       .join(', ')}`
   );
 
-  // With maxConcurrent=200, 1000ms latency, and only 60 total jobs (50 low + 10 high),
-  // all 50 low-pri jobs fit within the 200 slots. They dispatch immediately from RECEIVED
-  // state (FIFO). Priority only activates when slots are full (>200 in-flight).
-  // With sentinel holding 1 slot, 199 remaining slots can absorb all 60 queued jobs.
-  // So all low-pri jobs may dispatch before high-pri — this is expected behavior.
-  // The test validates that all jobs complete and the system doesn't break.
-  const MAX_LEAKAGE = 50; // All 50 low-pri jobs may dispatch before high-pri (slots available)
-  const passed = lowBeforeFirstHigh.length <= MAX_LEAKAGE && highEntries.length === 10;
+  // PreciseRateLimiter dispatches from min-heap in priority order.
+  // High-pri (0) should execute before low-pri (5). Allow small leakage.
+  const passed = lowBeforeFirstHigh.length <= 2 && highEntries.length === 10;
 
   console.log(`RESULT: ${passed ? 'PASS' : 'FAIL'}`);
 
   const details: string[] = [
-    `${lowBeforeFirstHigh.length} low-pri jobs ran before first high-pri (max ${MAX_LEAKAGE} allowed)`,
+    `${lowBeforeFirstHigh.length} low-pri jobs ran before first high-pri (max 2 allowed)`,
     `${highEntries.length}/10 high-pri jobs executed`,
-    `Config: maxConcurrent=${MC}, simulated latency=${SIMULATED_LATENCY}ms`,
-    `Note: with 200 slots and only 60 jobs, priority won't activate (slots available)`,
+    `Config: maxConcurrent=${MAX_CONCURRENT}, simulated latency=${SIMULATED_LATENCY}ms`,
   ];
 
   if (!passed) {
-    if (lowBeforeFirstHigh.length > MAX_LEAKAGE) {
+    if (lowBeforeFirstHigh.length > 2) {
       details.push(
         `Too many low-priority jobs (${lowBeforeFirstHigh.length}) ran before high-priority`
       );
@@ -317,7 +306,7 @@ async function testPriorityWithMaxConcurrent(): Promise<boolean> {
   }
 
   results.push({
-    name: `Priority ordering with maxConcurrent=${MC} (p0 before p5)`,
+    name: `Priority ordering with latency (p0 before p5)`,
     passed,
     details,
   });
@@ -329,8 +318,8 @@ async function testPriorityWithMaxConcurrent(): Promise<boolean> {
 // MAIN
 // ============================================
 async function main() {
-  console.log('Rate Pacing & Priority Test Suite');
-  console.log(`Target: ${RATE_LIMIT} RPS (${MIN_TIME}ms spacing)`);
+  console.log('Rate Pacing & Priority Test Suite (PreciseRateLimiter)');
+  console.log(`Target: ${RATE_LIMIT} RPS (${MIN_TIME}ms spacing), maxConcurrent=${MAX_CONCURRENT}`);
   console.log('='.repeat(60));
 
   // Test 1: Spacing
@@ -339,11 +328,11 @@ async function main() {
   // Test 2: Burst detection (uses timestamps from test 1)
   testBurstDetection(timestamps);
 
-  // Test 3a: Priority with production config (documents the limitation)
-  await testPriorityProductionConfig();
+  // Test 3a: Priority with instant jobs
+  await testPriorityInstantJobs();
 
-  // Test 3b: Priority with maxConcurrent (shows priority works when configured)
-  await testPriorityWithMaxConcurrent();
+  // Test 3b: Priority with simulated latency
+  await testPriorityWithLatency();
 
   // Summary
   console.log('\n' + '='.repeat(60));
@@ -361,11 +350,11 @@ async function main() {
   }
 
   console.log('\n' + '='.repeat(60));
-  console.log('AUDIT NOTES:');
-  console.log('  Test 3a: Documents that priority does NOT work without maxConcurrent.');
-  console.log('  Test 3b: Confirms system works with maxConcurrent=200 + 1000ms latency.');
-  console.log('  Production config uses maxConcurrent=ceil(rateLimit*2) for both');
-  console.log('  throughput and priority support under real API latencies.');
+  console.log('NOTES:');
+  console.log('  PreciseRateLimiter always enforces priority via min-heap.');
+  console.log('  Test 3a: Confirms priority works with instant (zero-latency) jobs.');
+  console.log('  Test 3b: Confirms priority works under realistic 1000ms latency.');
+  console.log(`  Production config: maxConcurrent=${MAX_CONCURRENT} (5x rate limit).`);
   console.log('='.repeat(60));
 
   console.log('\n' + (allPassed ? 'ALL TESTS PASSED' : 'SOME TESTS FAILED'));

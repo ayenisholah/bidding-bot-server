@@ -13,11 +13,11 @@
  *
  * Run with: npx ts-node src/scripts/test-realistic-throughput.ts
  */
-import Bottleneck from 'bottleneck';
+import { PreciseRateLimiter } from '../utils/precise-rate-limiter';
 
 const RATE_LIMIT = 100;
 const MIN_TIME = 1000 / RATE_LIMIT; // 10ms
-const MAX_CONCURRENT = Math.ceil(RATE_LIMIT * 2); // 200
+const MAX_CONCURRENT = Math.ceil(RATE_LIMIT * 5); // 500
 
 interface TestResult {
   name: string;
@@ -51,7 +51,7 @@ async function testThroughputWithLatency(): Promise<boolean> {
   console.log('\n=== TEST A: THROUGHPUT WITH SIMULATED LATENCY ===');
   console.log(`Config: minTime=${MIN_TIME}ms, maxConcurrent=${MAX_CONCURRENT}, latency=1000ms`);
 
-  const limiter = new Bottleneck({
+  const limiter = new PreciseRateLimiter({
     minTime: MIN_TIME,
     maxConcurrent: MAX_CONCURRENT,
     trackDoneStatus: true,
@@ -118,7 +118,7 @@ async function testPriorityUnderLoad(): Promise<boolean> {
   console.log('\n=== TEST B: PRIORITY UNDER LOAD ===');
   console.log(`Config: minTime=${MIN_TIME}ms, maxConcurrent=${MAX_CONCURRENT}, latency=1000ms`);
 
-  const limiter = new Bottleneck({
+  const limiter = new PreciseRateLimiter({
     minTime: MIN_TIME,
     maxConcurrent: MAX_CONCURRENT,
     trackDoneStatus: true,
@@ -203,7 +203,7 @@ async function testCounterbidLatency(): Promise<boolean> {
   console.log('\n=== TEST C: COUNTERBID DISPATCH LATENCY ===');
   console.log(`Config: minTime=${MIN_TIME}ms, maxConcurrent=${MAX_CONCURRENT}, latency=1000ms`);
 
-  const limiter = new Bottleneck({
+  const limiter = new PreciseRateLimiter({
     minTime: MIN_TIME,
     maxConcurrent: MAX_CONCURRENT,
     trackDoneStatus: true,
@@ -270,14 +270,17 @@ async function testThroughputSweep(): Promise<boolean> {
   console.log('\n=== TEST D: THROUGHPUT SWEEP (maxConcurrent vs dispatch RPS) ===');
   console.log(`Config: minTime=${MIN_TIME}ms, latency=1000ms, sweeping maxConcurrent`);
 
-  const SWEEP_VALUES = [1, 25, 50, 100, 150, 200, 300];
+  const SWEEP_VALUES = [1, 25, 50, 100, 200, 300, 500];
   const SIMULATED_LATENCY = 1000;
-  const NUM_JOBS = 300;
 
   const sweepResults: { maxConcurrent: number; dispatchRPS: number }[] = [];
 
   for (const mc of SWEEP_VALUES) {
-    const limiter = new Bottleneck({
+    // Use fewer jobs for low maxConcurrent to avoid extremely long wait times
+    // mc=1 with 1000ms latency can only do ~1 RPS, so 20 jobs = ~20s
+    const numJobs = mc <= 25 ? 20 : 300;
+
+    const limiter = new PreciseRateLimiter({
       minTime: MIN_TIME,
       maxConcurrent: mc,
       trackDoneStatus: true,
@@ -285,7 +288,7 @@ async function testThroughputSweep(): Promise<boolean> {
 
     const dispatchTimestamps: number[] = [];
 
-    const promises = Array.from({ length: NUM_JOBS }, () =>
+    const promises = Array.from({ length: numJobs }, () =>
       limiter.schedule(() => {
         dispatchTimestamps.push(performance.now());
         return simulateLatency(SIMULATED_LATENCY);
@@ -310,28 +313,29 @@ async function testThroughputSweep(): Promise<boolean> {
     );
   }
 
-  // Verify: maxConcurrent=1 should show throughput cliff, maxConcurrent=200 should be ~100 RPS
+  // Verify: maxConcurrent=1 should show throughput cliff, maxConcurrent=500 should be ~100 RPS
+  // mc=50 with 300 jobs and 1000ms latency: slots saturate after 50 dispatches → degraded
   const mc1 = sweepResults.find((r) => r.maxConcurrent === 1)!;
-  const mc25 = sweepResults.find((r) => r.maxConcurrent === 25)!;
-  const mc200 = sweepResults.find((r) => r.maxConcurrent === 200)!;
+  const mc50 = sweepResults.find((r) => r.maxConcurrent === 50)!;
+  const mc500 = sweepResults.find((r) => r.maxConcurrent === 500)!;
 
   const cliffDetected = mc1.dispatchRPS < 5; // maxConcurrent=1 with 1000ms latency → ~1 RPS
-  const mc25Broken = mc25.dispatchRPS < 30; // maxConcurrent=25 with 1000ms latency → ~25 RPS
-  const fullThroughput = mc200.dispatchRPS >= 90; // maxConcurrent=200 → ~100 RPS dispatch rate
-  const passed = cliffDetected && mc25Broken && fullThroughput;
+  const mc50Degraded = mc50.dispatchRPS < 80; // maxConcurrent=50 with 300 jobs → ~50 RPS (slot-bound)
+  const fullThroughput = mc500.dispatchRPS >= 90; // maxConcurrent=500 → ~100 RPS dispatch rate
+  const passed = cliffDetected && mc50Degraded && fullThroughput;
 
   console.log(`\nDispatch cliff at maxConcurrent=1: ${mc1.dispatchRPS.toFixed(1)} RPS → ${cliffDetected ? 'DETECTED' : 'NOT DETECTED'}`);
-  console.log(`Dispatch broken at maxConcurrent=25: ${mc25.dispatchRPS.toFixed(1)} RPS (< 30) → ${mc25Broken ? 'CONFIRMED' : 'NOT CONFIRMED'}`);
-  console.log(`Full dispatch at maxConcurrent=200: ${mc200.dispatchRPS.toFixed(1)} RPS → ${fullThroughput ? 'CONFIRMED' : 'INSUFFICIENT'}`);
+  console.log(`Dispatch degraded at maxConcurrent=50: ${mc50.dispatchRPS.toFixed(1)} RPS (< 80) → ${mc50Degraded ? 'CONFIRMED' : 'NOT CONFIRMED'}`);
+  console.log(`Full dispatch at maxConcurrent=500: ${mc500.dispatchRPS.toFixed(1)} RPS → ${fullThroughput ? 'CONFIRMED' : 'INSUFFICIENT'}`);
   console.log(`RESULT: ${passed ? 'PASS' : 'FAIL'}`);
 
   results.push({
-    name: 'D: Throughput sweep (cliff at mc=1, broken at mc=25, full at mc=200)',
+    name: 'D: Throughput sweep (cliff at mc=1, degraded at mc=50, full at mc=500)',
     passed,
     details: [
       `maxConcurrent=1: ${mc1.dispatchRPS.toFixed(1)} dispatch RPS (expect < 5)`,
-      `maxConcurrent=25: ${mc25.dispatchRPS.toFixed(1)} dispatch RPS (expect < 30)`,
-      `maxConcurrent=200: ${mc200.dispatchRPS.toFixed(1)} dispatch RPS (expect >= 90)`,
+      `maxConcurrent=50: ${mc50.dispatchRPS.toFixed(1)} dispatch RPS (expect < 80)`,
+      `maxConcurrent=500: ${mc500.dispatchRPS.toFixed(1)} dispatch RPS (expect >= 90)`,
       `Sweep: ${sweepResults.map((r) => `mc=${r.maxConcurrent}→${r.dispatchRPS.toFixed(0)}RPS`).join(', ')}`,
     ],
   });
@@ -346,7 +350,7 @@ async function testVariableLatencyStress(): Promise<boolean> {
   console.log('\n=== TEST E: VARIABLE LATENCY STRESS ===');
   console.log(`Config: minTime=${MIN_TIME}ms, maxConcurrent=${MAX_CONCURRENT}, mixed latency 200-3000ms`);
 
-  const limiter = new Bottleneck({
+  const limiter = new PreciseRateLimiter({
     minTime: MIN_TIME,
     maxConcurrent: MAX_CONCURRENT,
     trackDoneStatus: true,
@@ -445,9 +449,9 @@ async function testVariableLatencyStress(): Promise<boolean> {
 // MAIN
 // ============================================
 async function main() {
-  console.log('Realistic Throughput & Priority Test Suite');
+  console.log('Realistic Throughput & Priority Test Suite (PreciseRateLimiter)');
   console.log(`Target: ${RATE_LIMIT} RPS, maxConcurrent=${MAX_CONCURRENT}`);
-  console.log(`Formula: maxConcurrent = ceil(rateLimit * 2) = ceil(${RATE_LIMIT} * 2) = ${MAX_CONCURRENT}`);
+  console.log(`Formula: maxConcurrent = ceil(rateLimit * 5) = ceil(${RATE_LIMIT} * 5) = ${MAX_CONCURRENT}`);
   console.log('='.repeat(60));
 
   // Test A: Throughput with latency
@@ -482,8 +486,8 @@ async function main() {
 
   console.log('\n' + '='.repeat(60));
   console.log('KEY INSIGHT:');
-  console.log(`  maxConcurrent = ceil(rateLimit * 2) = ${MAX_CONCURRENT}`);
-  console.log(`  This sustains ${RATE_LIMIT} RPS dispatch rate with up to 2000ms avg API latency.`);
+  console.log(`  maxConcurrent = ceil(rateLimit * 5) = ${MAX_CONCURRENT}`);
+  console.log(`  This sustains ${RATE_LIMIT} RPS dispatch rate with up to 5000ms avg API latency.`);
   console.log(`  maxConcurrent=25 creates a dispatch cliff (~25 RPS with 1000ms latency).`);
   console.log('='.repeat(60));
 
