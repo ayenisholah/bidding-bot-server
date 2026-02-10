@@ -1845,17 +1845,15 @@ export async function fetchOpenseaOffers(
       }
     };
 
-    const response = await apiDedup(
-      `opensea-collection-offers-${collectionSlug}`,
-      () => limiter?.schedule(priority !== undefined ? { priority } : {}, () =>
-        axiosInstance.post(`${BASE_URL}/opensea/graphql`, query, {
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY
-          }
-        })
-      ),
-      { category: 'OpenSea' }
+    // Direct call without deduplication - consistent with fetchItemOffers approach
+    const response = await limiter?.schedule(
+      priority !== undefined ? { priority } : {},
+      () => axiosInstance.post(`${BASE_URL}/opensea/graphql`, query, {
+        headers: {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY
+        }
+      })
     );
     // Parse the GraphQL response
     const offerAggregates = response.data?.data?.collectionOfferAggregates?.items || [];
@@ -2045,17 +2043,15 @@ export async function fetchOpenseaOffers(
           }
         };
 
-        return apiDedup(
-          `opensea-trait-offers-collection-${collectionSlug}`,
-          () => limiter?.schedule(priority !== undefined ? { priority } : {}, () =>
-            axiosInstance.post(`${BASE_URL}/opensea/graphql`, collectionQuery, {
-              headers: {
-                'content-type': 'application/json',
-                'x-api-key': API_KEY
-              }
-            })
-          ),
-          { category: 'OpenSea' }
+        // Direct call without deduplication
+        return limiter?.schedule(
+          priority !== undefined ? { priority } : {},
+          () => axiosInstance.post(`${BASE_URL}/opensea/graphql`, collectionQuery, {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            }
+          })
         );
       },
 
@@ -2205,17 +2201,15 @@ export async function fetchOpenseaOffers(
           }
         };
 
-        return apiDedup(
-          `opensea-trait-offers-${collectionSlug}-${type}-${value}`,
-          () => limiter?.schedule(priority !== undefined ? { priority } : {}, () =>
-            axiosInstance.post(`${BASE_URL}/opensea/graphql`, traitQuery, {
-              headers: {
-                'content-type': 'application/json',
-                'x-api-key': API_KEY
-              }
-            })
-          ),
-          { category: 'OpenSea' }
+        // Direct call without deduplication
+        return limiter?.schedule(
+          priority !== undefined ? { priority } : {},
+          () => axiosInstance.post(`${BASE_URL}/opensea/graphql`, traitQuery, {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            }
+          })
         );
       }
     ];
