@@ -17918,10 +17918,12 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
                 tokenOffer = BigInt(Math.round(roundToValidPrecision(potentialNewBidEth) * Math.pow(10, decimal)));
               }
               else if (spread > outbidMargin && Number(secondTopBidAmount) > 0 && potentialNewBidEth < minBidPriceEth) {
-                // Large spread but potential bid below min: keep current offer
+                // Large spread but can't lower bid (would go below minimum) - keep current offer, skip rebid
+                return;
               }
               else if (ttl > MIN_BID_DURATION) {
-                // Our bid is still valid with sufficient TTL
+                // Our bid is still valid with sufficient TTL - skip rebid
+                return;
               } else {
                 // Renew at same price
                 tokenOffer = BigInt(Math.round(roundToValidPrecision(highestBidAmount / Math.pow(10, decimal)) * Math.pow(10, decimal)));
@@ -17990,8 +17992,10 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     // Log bid decision context for debugging
     if (Math.abs(finalOfferEth - minBidPriceEth) < 0.0001) {
       warnLog('BidFlow',
-        `[MinBid Fallback] Placing bid at minimum price | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | minBid=${minBidPriceEth} | ` +
-        `This may indicate: (1) no existing offers, (2) fetchItemOffers failed, or (3) calculated bid below minimum`,
+        `[MinBid Fallback] Placing bid at minimum price | taskId=${_id} | collection=${slug} | ` +
+        `token=${asset.tokenId} | minBid=${minBidPriceEth} | finalBid=${finalOfferEth} | ` +
+        `Calculated bid was below minimum threshold (likely due to: no existing competitive offers, ` +
+        `low top bid, spread optimization, or user-configured price below minimum)`,
         { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId, minBidPriceEth, finalOfferEth }
       );
     }
