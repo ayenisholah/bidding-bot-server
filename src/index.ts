@@ -7440,52 +7440,6 @@ function getCounterbidCount(isBlurQueue: boolean): number {
 
 
 
-
-// Helper function to check for duplicate jobs in queue
-async function checkForDuplicateJobs(queue: Queue, jobsToAdd: Array<{ name: string, data: any, opts: any }>) {
-  try {
-    // Get all job IDs we're trying to add
-    const jobIdsToAdd = new Set(jobsToAdd.map(job => job.opts?.jobId).filter(Boolean));
-
-    if (jobIdsToAdd.size === 0) {
-      // No jobIds to check, return all jobs
-      return jobsToAdd;
-    }
-
-    // Check if these jobs already exist in the queue
-    const existingJobs = await Promise.all(
-      Array.from(jobIdsToAdd).map(jobId => queue.getJob(jobId as string))
-    );
-
-    // Create a set of existing job IDs
-    const existingJobIds = new Set(
-      existingJobs
-        .filter(job => job !== null && job !== undefined)
-        .map(job => job!.id)
-        .filter(id => id !== null && id !== undefined)
-    );
-
-    // Filter out jobs that already exist
-    const nonDuplicateJobs = jobsToAdd.filter(job => {
-      const jobId = job.opts?.jobId;
-      if (!jobId) return true; // Jobs without IDs can't be checked for duplicates
-
-      const exists = existingJobIds.has(jobId);
-      return !exists;
-    });
-
-    const duplicatesFound = jobsToAdd.length - nonDuplicateJobs.length;
-    if (duplicatesFound > 0 || DEBUG) {
-    }
-
-    return nonDuplicateJobs;
-  } catch (error) {
-    // If checking fails, log the error but don't block job addition
-    errorLog('DuplicateJobCheck', 'Error checking for duplicates', error);
-    return jobsToAdd;
-  }
-}
-
 // Helper function to chunk array
 /**
  * Splits an array into smaller arrays (chunks) of a specified size.
