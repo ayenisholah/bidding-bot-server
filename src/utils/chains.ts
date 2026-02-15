@@ -19,6 +19,7 @@ export const CHAIN_OPTIONS = [
   { label: "Flow", value: "flow", logo: "/chains/flow.svg" },
   { label: "Klaytn", value: "klaytn", logo: "/chains/klaytn.png" },
   { label: "Matic", value: "matic", logo: "/chains/matic.png" },
+  { label: "MegaETH", value: "megaeth", logo: "/chains/megaeth.svg" },
   { label: "Optimism", value: "optimism", logo: "/chains/optimism.png" },
   { label: "Ronin", value: "ronin", logo: "/chains/ronin.png" },
   { label: "Shape", value: "shape", logo: "/chains/shape.svg" },
@@ -194,6 +195,36 @@ const CHAIN_CONFIGS: Partial<Record<ChainValue, ChainConfig>> = {
       opensea: SEAPORT_SPENDER_ADDRESS,
     },
   },
+  megaeth: {
+    value: "megaeth",
+    label: "MegaETH",
+    provider: {
+      chainId: 4326,
+      alchemyNetwork: "megaeth",
+      rpcUrlEnv: "MEGAETH_RPC_URL",
+    },
+    currencies: {
+      weth: {
+        symbol: "WETH",
+        address: "0x4200000000000000000000000000000000000006",
+        decimals: 18,
+      },
+      usdm: {
+        symbol: "USDM",
+        address: "0xFAfDdbb3FC7688494971a79cc65DCa3EF82079E7",
+        decimals: 18,
+      },
+    },
+    marketplaces: {
+      opensea: SEAPORT_CONTRACT_ADDRESS,
+    },
+    apiIdentifiers: {
+      opensea: "megaeth",
+    },
+    marketplaceSpenders: {
+      opensea: SEAPORT_SPENDER_ADDRESS,
+    },
+  },
 };
 
 const providerCache = new Map<ChainValue, ethers.JsonRpcProvider>();
@@ -211,6 +242,9 @@ const CHAIN_ALIAS_MAP: Record<string, ChainValue> = {
   // Abstract
   abstract: "abstract",
   "abstract-mainnet": "abstract",
+  // MegaETH
+  megaeth: "megaeth",
+  "megaeth-mainnet": "megaeth",
 };
 
 export function normalizeChainValue(chain?: ChainValue | string | null): ChainValue {
@@ -234,6 +268,9 @@ function resolveAlchemyRpcUrl(network: string, apiKey?: string): string | undefi
       return `https://abstract-mainnet.g.alchemy.com/v2/${apiKey}`;
     }
     return "https://api.mainnet.abs.xyz";
+  }
+  if (network === "megaeth-mainnet" || network === "megaeth") {
+    return "https://mainnet.megaeth.com/rpc";
   }
   if (apiKey) {
     return `https://${network}.g.alchemy.com/v2/${apiKey}`;
