@@ -1,12 +1,9 @@
 import { ethers, Wallet, formatUnits } from "ethers";
 import { limiter, isTaskBlacklisted, axiosInstance } from "../../init";
-import { activeTasks, API_KEY, currentTasks, decrementBidCount, pQueue, RESET, trackBidRate, GOLD, updateTaskCancellationPercentage } from "../..";
+import { activeTasks, API_KEY, currentTasks, decrementBidCount, RESET, trackBidRate, GOLD, updateTaskCancellationPercentage } from "../..";
 import { config } from "dotenv";
-import { DistributedLockManager } from "../../utils/lock";
-import Order from '../../models/order.model';
 import { orderCache } from '../../utils/order-cache';
 import { withRetry } from '../../utils/db-retry';
-import redisClient from '../../utils/redis';
 import { isCancel } from "axios";
 import { BASE_URL } from "../../constants";
 import { fetchERC20Balance } from "../../utils/balance";
@@ -14,32 +11,36 @@ import { convertBigNumbers } from "../../utils/bigNumberConverter";
 import { InsufficientBalanceError, TransferRestrictedError, MinimumPriceError, InvalidRequestError } from "../errors";
 import { blurRateLimiter } from "../../utils/blur-rate-limiter";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
-import { errorLog, warnLog, debugLog } from "../../utils/debug-file-logger";
+import { errorLog, warnLog} from "../../utils/debug-file-logger";
 import { apiDedup } from "../../utils/api-dedup";
 import { isCollectionUnavailable, markCollectionUnavailable } from "../../utils/marketplace-availability";
-import { BoundedCache } from "../../utils/bounded-cache";
+import { LRUCache } from 'lru-cache';
+import { addIfNotExists } from '../../utils/lru-helpers';
+import { blurAccessTokenLRU, blurStatsLRU, blurAuthBlockLRU, blurWalletPauseLRU } from './cache';
+import { mainProvider as provider } from '../../utils/provider';
 
 const BLUR_POOL_ADDRESS = "0x0000000000A39bb272e79075ade125fd351887Ac";
 
 // Cache for deduplicating insufficient balance error logs (5 second TTL per wallet/collection)
 // This prevents log flooding when multiple parallel jobs hit the same balance check
-const insufficientBalanceLogCache = new BoundedCache<string, number>(1000, 5000, 'blurInsufficientBalanceLogCache');
+const insufficientBalanceLogCache = new LRUCache<string, boolean>({
+  max: 1000,
+  ttl: 5000 // 5 seconds
+});
 
 config()
 const BLUR_API_URL = `${BASE_URL}/blur`;
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY as string;
-
-const provider = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
-
-const lockManager = new DistributedLockManager({
-  lockPrefix: 'blur:lock:',
-  defaultTTLSeconds: 60 // 1 minute lock timeout
-});
 
 const activeRequests = new Map<string, AbortController[]>();
 
 // Track authentication attempts in progress to prevent concurrent auth for same wallet
 const authInProgress = new Map<string, Promise<string | undefined>>();
+
+// In-flight tracking for authentication fetch (Phase 4 migration - replaces distributed lock)
+const authFetchInFlight = new Map<string, Promise<string | undefined>>();
+
+// In-flight tracking for stats fetch (Phase 4 migration - replaces distributed lock)
+const statsFetchInFlight = new Map<string, Promise<number>>();
 
 // Authentication retry queue for failed attempts
 const authRetryQueue = new Map<string, { retryCount: number; nextRetryTime: number }>();
@@ -47,11 +48,13 @@ const AUTH_RETRY_DELAY = 60000; // 60 seconds between retry attempts
 const MAX_AUTH_RETRIES = 3;
 
 // Cache for transfer-restricted collections (TTL: 24 hours)
-const transferRestrictedCollections = new Map<string, number>();
+// Exported for MemoryCleanupService to perform periodic cleanup
+export const transferRestrictedCollections = new Map<string, number>();
 const RESTRICTION_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 // Authentication metrics
-const authMetrics = {
+// Exported for MemoryCleanupService to perform periodic cleanup
+export const authMetrics = {
   attempts: 0,
   successes: 0,
   failures: 0,
@@ -60,7 +63,8 @@ const authMetrics = {
 };
 
 // 408 Error metrics for monitoring
-const timeoutMetrics = {
+// Exported for MemoryCleanupService to perform periodic cleanup
+export const timeoutMetrics = {
   total408Errors: 0,
   auth408Errors: 0,
   format408Errors: 0,
@@ -98,48 +102,33 @@ function addActiveRequest(taskId: string, controller: AbortController) {
   activeRequests.get(taskId)?.push(controller);
 }
 
-export async function cancelBlurRequest(taskId: string): Promise<{ success: boolean; cancelledCount: number; error?: string }> {
+export async function cancelBlurRequest(taskId: string): Promise<number> {
   // Input validation
   if (!taskId || typeof taskId !== 'string') {
-    warnLog('API', `[Blur] Invalid taskId provided to cancelBlurRequest | taskId=${taskId}`);
-    return { success: false, cancelledCount: 0, error: 'Invalid taskId' };
+    warnLog('HttpAbort', `CANCEL_INVALID | marketplace=blur | taskId=${taskId} | reason=invalid_taskId`);
+    return 0;
   }
 
   const controllers = activeRequests.get(taskId);
   if (!controllers || controllers.length === 0) {
-
-    return { success: false, cancelledCount: 0 };
+    return 0;
   }
 
-  try {
-    let cancelledCount = 0;
+  const count = controllers.length;
 
-    // Cancel all controllers with timeout protection
-    await Promise.all(controllers.map(async (controller) => {
-      try {
-        const timeoutPromise = new Promise<void>((_, reject) => {
-          setTimeout(() => reject(new Error('Abort timeout')), 5000);
-        });
-
-        const abortPromise = new Promise<void>((resolve) => {
-          controller.abort();
-          resolve();
-        });
-
-        await Promise.race([abortPromise, timeoutPromise]);
-        cancelledCount++;
-      } catch (error) {
-        errorLog('API', `[Blur] Failed to abort request controller | taskId=${taskId}`, error);
-      }
-    }));
-
-    activeRequests.delete(taskId);
-
-    return { success: true, cancelledCount };
-  } catch (error) {
-    errorLog('API', `[Blur] Failed to cancel requests | taskId=${taskId} | ${error instanceof Error ? error.message : String(error)}`, error);
-    return { success: false, cancelledCount: 0, error: error instanceof Error ? error.message : String(error) };
+  let cancelledCount = 0;
+  for (let i = 0; i < controllers.length; i++) {
+    try {
+      controllers[i].abort();
+      cancelledCount++;
+    } catch (err) {
+      errorLog('HttpAbort', `ABORT_ERROR | marketplace=blur | taskId=${taskId} | requestIndex=${i} | error=${(err as Error).message}`, err);
+    }
   }
+
+  activeRequests.delete(taskId);
+
+  return cancelledCount;
 }
 
 /**
@@ -200,7 +189,7 @@ export async function bidOnBlur(
       );
       // Only log once per wallet/collection combo within 5 seconds to prevent log flooding
       const dedupeKey = `blur-${wallet_address}-${slug}`;
-      if (insufficientBalanceLogCache.addIfNotExists(dedupeKey, Date.now())) {
+      if (addIfNotExists(insufficientBalanceLogCache, dedupeKey, true)) {
         errorLog('Balance', `[Blur] Insufficient BETH balance | wallet=${wallet_address.slice(0, 10)}... | slug=${slug} | bid=${offerPriceEth} | available=${bethBalance}`, error);
       }
       throw error;
@@ -300,15 +289,17 @@ export async function bidOnBlur(
  */
 // Export function to check if wallet is auth blocked
 export async function isWalletAuthBlocked(walletAddress: string): Promise<boolean> {
-  const redis = redisClient.getClient();
-  if (!redis) return false;
+  const walletAddressLower = walletAddress.toLowerCase();
 
-  const authBlockKey = `blur:auth:block:${walletAddress}`;
-  const authBlockTime = await redis.get(authBlockKey);
+  // Check LRU cache with dynamic TTL pattern (Phase 3 migration)
+  const block = blurAuthBlockLRU.get(walletAddressLower);
 
-  if (authBlockTime) {
-    const blockTime = parseInt(authBlockTime);
-    return blockTime > Date.now();
+  if (block && block.blockedUntil > Date.now()) {
+    // Still blocked
+    return true;
+  } else if (block) {
+    // Expired - remove from cache
+    blurAuthBlockLRU.delete(walletAddressLower);
   }
 
   return false;
@@ -325,36 +316,24 @@ export async function getAccessToken(private_key: string): Promise<string | unde
     throw error;
   }
 
-  // First, check cache OUTSIDE the lock for immediate return
-  const key = `blurAccessToken:${wallet.address}`;
-  const redis = redisClient.getClient();
-
-  try {
-    const cachedToken = redis ? await redis.get(key) : null;
-    if (cachedToken) {
-      console.log(`[Auth Cache] Using cached token for ${wallet.address}`);
-      return cachedToken;
-    }
-  } catch {
-    warnLog('Cache', `[Blur] Failed to read auth cache | wallet=${wallet.address}`);
+  // First, check cache OUTSIDE the lock for immediate return (LRU cache - Phase 3 migration)
+  const walletAddressLower = wallet.address.toLowerCase();
+  const cachedToken = blurAccessTokenLRU.get(walletAddressLower);
+  if (cachedToken) {
+    console.log(`[Auth Cache] Using cached token for ${wallet.address}`);
+    return cachedToken;
   }
 
-  // Check for authentication block in Redis first
-  if (redis) {
-    const authBlockKey = `blur:auth:block:${wallet.address}`;
-    const authBlockTime = await redis.get(authBlockKey);
-    if (authBlockTime) {
-      const blockTime = parseInt(authBlockTime);
-      if (blockTime > Date.now()) {
-        const waitTime = blockTime - Date.now();
-        console.log(GOLD + `[Auth Block] Wallet ${wallet.address} is. blocked by Blur API` + RESET);
-        console.log(GOLD + `[Auth Block] Wait time: ${Math.ceil(waitTime / 1000)} seconds` + RESET);
-        throw new Error(`Authentication blocked until ${new Date(blockTime).toISOString()}`);
-      } else {
-        // Block has expired, remove it
-        await redis.del(authBlockKey);
-      }
-    }
+  // Check for authentication block using LRU cache (Phase 3 migration - dynamic TTL pattern)
+  const block = blurAuthBlockLRU.get(walletAddressLower);
+  if (block && block.blockedUntil > Date.now()) {
+    const waitTime = block.blockedUntil - Date.now();
+    console.log(GOLD + `[Auth Block] Wallet ${wallet.address} is blocked by Blur API` + RESET);
+    console.log(GOLD + `[Auth Block] Wait time: ${Math.ceil(waitTime / 1000)} seconds` + RESET);
+    throw new Error(`Authentication blocked until ${new Date(block.blockedUntil).toISOString()}`);
+  } else if (block) {
+    // Block has expired, remove it
+    blurAuthBlockLRU.delete(walletAddressLower);
   }
 
   // Check authentication retry queue
@@ -381,24 +360,25 @@ export async function getAccessToken(private_key: string): Promise<string | unde
   // If no cached token and no auth in progress, start authentication
   // console.log(`[Auth State] Starting new authentication for ${wallet.address}`);
 
-  // Create and store the authentication promise
-  const authPromise = lockManager.withLock(lockKey, async () => {
-    const options = { walletAddress: wallet.address };
-    const headers = {
-      'content-type': 'application/json',
-      'x-api-key': API_KEY
-    };
+  // Check if fetch already in progress (in-flight Map pattern - Phase 4 migration)
+  let inFlightPromise = authFetchInFlight.get(lockKey);
 
-    // Double-check cache inside lock (race condition protection)
-    try {
-      const cachedToken = redis ? await redis.get(key) : null;
-      if (cachedToken) {
-        // console.log(`[Auth Cache] Found cached token after acquiring lock for ${wallet.address}`);
-        return cachedToken;
-      }
-    } catch {
-      warnLog('Cache', `[Blur] Failed to double-check cache | wallet=${wallet.address}`);
-    }
+  if (!inFlightPromise) {
+    // Create new fetch operation
+    inFlightPromise = (async () => {
+      try {
+        const options = { walletAddress: wallet.address };
+        const headers = {
+          'content-type': 'application/json',
+          'x-api-key': API_KEY
+        };
+
+        // Double-check cache after starting fetch (race condition protection - LRU cache)
+        const cachedTokenInLock = blurAccessTokenLRU.get(walletAddressLower);
+        if (cachedTokenInLock) {
+          // console.log(`[Auth Cache] Found cached token after acquiring lock for ${wallet.address}`);
+          return cachedTokenInLock;
+        }
 
     // console.log(`[Auth] Starting authentication for ${wallet.address}`);
 
@@ -425,11 +405,10 @@ export async function getAccessToken(private_key: string): Promise<string | unde
         response = await limiter.schedule(() => axiosInstance
           .post(`${BLUR_API_URL}/auth/login`, data, { headers, timeout: 45000 }));
         const accessToken = response.data.accessToken;
-        if (redis) {
-          // Increase cache TTL from 5 minutes to 10 minutes
-          await redis.set(key, accessToken, 'EX', 10 * 60);
-          // console.log(`[Auth Cache] Successfully cached token for ${wallet.address} (TTL: 10 minutes)`);
-        }
+
+        // Cache token in LRU (10 minute TTL - Phase 3 migration)
+        blurAccessTokenLRU.set(walletAddressLower, accessToken);
+        // console.log(`[Auth Cache] Successfully cached token for ${wallet.address} (TTL: 10 minutes)`)
 
         authMetrics.successes++;
 
@@ -463,13 +442,9 @@ export async function getAccessToken(private_key: string): Promise<string | unde
           // console.log(RED + `[Auth Block] Wallet ${wallet.address} is blocked by Blur until ${retryAfterTimestamp}` + RESET);
           // console.log(RED + `[Auth Block] Need to wait ${Math.ceil(waitTime / 1000)} seconds` + RESET);
 
-          // Store auth block in Redis
-          if (redis) {
-            const authBlockKey = `blur:auth:block:${wallet.address}`;
-            const ttl = Math.ceil(waitTime / 1000) + 60; // Add 60s buffer
-            await redis.set(authBlockKey, retryAfterTime.toString(), 'EX', ttl);
-            // console.log(`[Auth Block] Stored block status in Redis with TTL ${ttl}s`);
-          }
+          // Store auth block in LRU with dynamic TTL (Phase 3 migration)
+          blurAuthBlockLRU.set(walletAddressLower, { blockedUntil: retryAfterTime });
+          // console.log(`[Auth Block] Stored block status in LRU cache until ${retryAfterTimestamp}`);
 
           // Clear from retry queue and auth in progress
           authRetryQueue.delete(wallet.address);
@@ -482,19 +457,17 @@ export async function getAccessToken(private_key: string): Promise<string | unde
         // Enhanced retry handling based on error type
         if (error.response?.status === 401) {
           // Unauthorized - token expired or invalid, clear cache and retry
-          if (redis) {
-            await redis.del(key);
-            // console.log(`[Auth 401] Cleared cached token for ${wallet.address}, will retry authentication`);
-          }
+          blurAccessTokenLRU.delete(walletAddressLower);
+          // console.log(`[Auth 401] Cleared cached token for ${wallet.address}, will retry authentication`);
+
           // Clear auth in progress to allow fresh attempt
           authInProgress.delete(wallet.address);
           // Quick retry for token refresh
           const waitTime = 500 + (retries * 500); // 500ms, 1s, 1.5s
           await new Promise(resolve => setTimeout(resolve, waitTime));
         } else if (error.response?.status === 403) {
-          if (redis) {
-            await redis.del(key);
-          }
+          // Forbidden - clear cached token
+          blurAccessTokenLRU.delete(walletAddressLower);
           // Exponential backoff: 2s, 4s, 8s, 16s, 32s
           const waitTime = Math.min(Math.pow(2, retries + 1) * 1000, 32000);
           // console.log(`Waiting ${waitTime}ms before retry due to 403 error...`);
@@ -522,18 +495,24 @@ export async function getAccessToken(private_key: string): Promise<string | unde
       }
     }
 
-    // If all retries failed, throw the last error
-    errorLog('Blur', `Failed to get access token after ${maxRetries} attempts | wallet=${wallet.address}`, lastError);
-    throw lastError || new Error('Failed to authenticate with Blur');
+        // If all retries failed, throw the last error
+        errorLog('Blur', `Failed to get access token after ${maxRetries} attempts | wallet=${wallet.address}`, lastError);
+        throw lastError || new Error('Failed to authenticate with Blur');
+      } finally {
+        // Remove from in-flight tracking
+        authFetchInFlight.delete(lockKey);
+      }
+    })();
 
-  });
+    authFetchInFlight.set(lockKey, inFlightPromise);
+  }
 
-  // Store the auth promise in the map before starting
-  authInProgress.set(wallet.address, authPromise);
+  // Store the auth promise in the map before starting (legacy authInProgress tracking)
+  authInProgress.set(wallet.address, inFlightPromise);
 
   try {
-    // Execute the authentication
-    const result = await authPromise;
+    // Wait for fetch to complete (either new or in-progress)
+    const result = await inFlightPromise;
     // console.log(`[Auth State] Authentication completed for ${wallet.address}`);
 
     // Clear from retry queue on success
@@ -580,6 +559,11 @@ async function formatBidOnBlur(
   buildPayload: any,
   privateKey?: string
 ) {
+  // Early blacklist check BEFORE entering limiter queue (Fix 3: Bids after stopTask)
+  if (isTaskBlacklisted(taskId, 'blur')) {
+    return null;
+  }
+
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
 
@@ -599,7 +583,6 @@ async function formatBidOnBlur(
       const { data } = await limiter.schedule(async () => {
         // Re-check blacklist AFTER waiting in limiter queue
         if (isTaskBlacklisted(taskId, 'blur')) {
-          debugLog('InFlightBid', `FORMAT_BLOCKED_POST_QUEUE | taskId=${taskId} | marketplace=blur | waitTime=${Date.now() - formatStartTime}ms`, { taskId, marketplace: 'blur' });
           throw new Error('Task stopped while waiting in limiter queue');
         }
 
@@ -615,7 +598,7 @@ async function formatBidOnBlur(
           data: JSON.stringify(buildPayload),
           signal: controller.signal,
           timeout: 60000,
-          "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
+          "axios-retry": { retries: 3 } // Enable retries for transient errors (520/502/504)
         });
       });
 
@@ -645,12 +628,8 @@ async function formatBidOnBlur(
       if (error.response?.status === 403 && retries < maxRetries && privateKey) {
         // console.log(`Got 403 error formatting Blur bid, refreshing token and retrying...`);
 
-        // Clear the cached token
-        const redis = redisClient.getClient();
-        if (redis) {
-          const key = `blurAccessToken:${walletAddress}`;
-          await redis.del(key);
-        }
+        // Clear the cached token (LRU cache - Phase 3 migration)
+        blurAccessTokenLRU.delete(walletAddress.toLowerCase());
 
         // Get a fresh token
         try {
@@ -710,8 +689,15 @@ async function submitBidToBlur(
   cancelPayload: any,
   expiry = 900,
   traits?: string,
-  source: 'scheduled' | 'counterbid' = 'scheduled'
+  _source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
+  const [parsedTaskId] = bidCount.split(":");
+
+  // Early blacklist check BEFORE creating AbortController and entering limiter queue (Fix 3: Bids after stopTask)
+  if (isTaskBlacklisted(parsedTaskId, 'blur')) {
+    return;
+  }
+
   const controller = new AbortController();
   addActiveRequest(taskId, controller);
 
@@ -721,19 +707,11 @@ async function submitBidToBlur(
     // Calculate formatted ETH price for logging
     const offerPriceEth = (Math.round(Number(formatUnits(offer_price.toString(), 18)) * 100) / 100).toFixed(2);
 
-    const [parsedTaskId] = bidCount.split(":")
     const bidStartTime = Date.now();
-
-    if (isTaskBlacklisted(parsedTaskId, 'blur')) {
-      debugLog('InFlightBid', `BLOCKED_EARLY | taskId=${parsedTaskId} | marketplace=blur | reason=blacklisted`, { taskId: parsedTaskId, marketplace: 'blur' });
-      return;
-    }
     const currentTask = activeTasks.get(parsedTaskId)
     if (!currentTask?.running || !currentTask.selectedMarketplaces.map((marketplace) => marketplace.toLowerCase()).includes("BLUR".toLowerCase())) return
     let running = currentTasks.find((task) => task.contract.slug.toLowerCase() === slug.toLowerCase())
     if (!running) return
-
-    debugLog('InFlightBid', `ENTERING_LIMITER | taskId=${parsedTaskId} | marketplace=blur | collection=${slug} | timestamp=${bidStartTime}`, { taskId: parsedTaskId, marketplace: 'blur' });
 
     // Try to reserve a request slot atomically
     let reserved = false;
@@ -767,11 +745,8 @@ async function submitBidToBlur(
           response = await limiter.schedule(async () => {
             // Re-check blacklist AFTER waiting in limiter queue - this is the critical fix
             if (isTaskBlacklisted(parsedTaskId, 'blur')) {
-              debugLog('InFlightBid', `BLOCKED_POST_QUEUE | taskId=${parsedTaskId} | marketplace=blur | waitTime=${Date.now() - bidStartTime}ms`, { taskId: parsedTaskId, marketplace: 'blur' });
               throw new Error('Task stopped while waiting in limiter queue');
             }
-
-            debugLog('InFlightBid', `EXECUTING_REQUEST | taskId=${parsedTaskId} | marketplace=blur | waitTime=${Date.now() - bidStartTime}ms`, { taskId: parsedTaskId, marketplace: 'blur' });
 
             return axiosInstance.request({
               method: 'POST',
@@ -785,7 +760,7 @@ async function submitBidToBlur(
               data: JSON.stringify(submitPayload),
               signal: controller.signal,
               timeout: 60000,
-              "axios-retry": { retries: 0 } // Disable automatic retries to prevent duplicate error logging
+              "axios-retry": { retries: 3 } // Enable retries for transient errors (520/502/504)
             });
           });
           break; // Success, exit retry loop
@@ -844,37 +819,22 @@ async function submitBidToBlur(
           identifier = "collection"
         }
 
-        const expiresAt = new Date(Date.now() + expiry * 1000);
-        const orderData = {
-          slug: slug,
+        const expiresAt = Date.now() + expiry * 1000;
+        const createdAt = Date.now();
+
+        // Place new bid immediately (appends to array, no auto-cancellation)
+        // Multiple orders per identifier are now supported
+        await orderCache.set({
           orderHash: JSON.stringify(cancelPayload),
           expiresAt: expiresAt,
           offerPrice: offer_price.toString(),
+          createdAt: createdAt,
           identifier: identifier,
-          taskId: taskId,
-          marketplace: "blur"
-        };
-        await withRetry(async () => {
-          const savedOrder = await Order.create(orderData);
-          // Update in-memory cache
-          orderCache.set({
-            _id: savedOrder._id.toString(),
-            orderHash: savedOrder.orderHash,
-            expiresAt: savedOrder.expiresAt.getTime(),
-            offerPrice: savedOrder.offerPrice,
-            createdAt: savedOrder.createdAt.getTime(),
-            identifier: savedOrder.identifier,
-            marketplace: savedOrder.marketplace,
-            slug: savedOrder.slug,
-            taskId: savedOrder.taskId
-          });
-        })
-        trackBidRate("blur", taskId)
-
-        // Log successful bid
-        const sourceTag = source === 'counterbid' ? '-CB' : '';
-        const bidType = traits ? 'Trait' : 'Coll';
-        debugLog('BidFlow', `[Blur-${bidType}${sourceTag}] ${slug} | SUCCESS | identifier=${identifier} | price=${offerPriceEth} BETH`, { taskId, marketplace: 'blur', identifier });
+          marketplace: "blur",
+          slug: slug,
+          taskId: taskId
+        });
+        trackBidRate("blur", taskId);
 
         // Mark request as successful
         requestSuccessful = true;
@@ -939,24 +899,19 @@ async function submitBidToBlur(
         // console.log(RED + `Response: ${error.response?.data?.message || 'Rate limit exceeded'}` + RESET);
         // console.log(RED + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
 
-        // Store wallet pause info for processBlurJob to check
+        // Store wallet pause info for processBlurJob to check (Phase 3 migration - dynamic TTL pattern)
         const pauseDuration = retryAfter ? parseInt(retryAfter) * 1000 : 60000; // Default to 60 seconds if no retry-after
-        await withRetry(async () => {
-          const redis = redisClient.getClient();
-          if (redis) {
-            const pauseKey = `blur:wallet:pause:${walletAddress}`;
-            const pauseUntil = Date.now() + pauseDuration;
-            await redis.set(pauseKey, pauseUntil.toString(), 'PX', pauseDuration);
+        const pauseUntil = Date.now() + pauseDuration;
 
-            // console.log(GOLD + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-            // console.log(GOLD + `[Blur Rate Limit] Setting Wallet Pause` + RESET);
-            // console.log(GOLD + `Wallet: ${walletAddress}` + RESET);
-            // console.log(GOLD + `Pause Duration: ${pauseDuration}ms (${Math.round(pauseDuration / 1000)}s)` + RESET);
-            // console.log(GOLD + `Resume At: ${new Date(pauseUntil).toLocaleTimeString()}` + RESET);
-            // console.log(GOLD + `Redis Key: ${pauseKey}` + RESET);
-            // console.log(GOLD + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
-          }
-        });
+        // Store in LRU cache with dynamic TTL pattern
+        blurWalletPauseLRU.set(walletAddress.toLowerCase(), { pauseUntil });
+
+        // console.log(GOLD + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
+        // console.log(GOLD + `[Blur Rate Limit] Setting Wallet Pause` + RESET);
+        // console.log(GOLD + `Wallet: ${walletAddress}` + RESET);
+        // console.log(GOLD + `Pause Duration: ${pauseDuration}ms (${Math.round(pauseDuration / 1000)}s)` + RESET);
+        // console.log(GOLD + `Resume At: ${new Date(pauseUntil).toLocaleTimeString()}` + RESET);
+        // console.log(GOLD + '-----------------------------------------------------------------------------------------------------------------------------------------' + RESET);
       }
 
       const formattedPrice = (Math.round(Number(formatUnits(offer_price.toString(), 18)) * 100) / 100).toFixed(2);
@@ -1059,9 +1014,10 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
       )
     ];
 
-    const [traitResponse, collectionResponse] = await pQueue.addAll(tasks, {
-      throwOnTimeout: true,
-    });
+    const results = await Promise.allSettled(tasks.map(t => t()));
+    const [traitResponse, collectionResponse] = results.map(r =>
+      r.status === 'fulfilled' ? r.value : { data: { success: false, priceLevels: [] } }
+    );
 
     const traitData = traitResponse.data;
     const collectionData = collectionResponse.data;
@@ -1104,73 +1060,76 @@ export async function fetchBlurBid(collection: string, criteriaType: 'TRAIT' | '
 
 export async function fetchBlurCollectionStats(slug: string, priority?: number) {
   // Check if collection is known to be unavailable on Blur
-  const unavailable = await isCollectionUnavailable('blur', slug);
+  const unavailable = isCollectionUnavailable('blur', slug);
   if (unavailable) {
     return 0; // Skip API call, already cached as unavailable
   }
 
-  const CACHE_TTL = 30; // 30 seconds cache
-  const cacheKey = `blur:stats:${slug}`;
   const lockKey = `stats:${slug}`;
+  const slugLower = slug.toLowerCase();
 
-  // Try to get from cache first
-  try {
-    const redis = redisClient.getClient();
-    if (redis) {
-      const cachedStats = await redis.get(cacheKey);
-      if (cachedStats) {
-        return JSON.parse(cachedStats);
-      }
-    }
-  } catch {
-    warnLog('Cache', `[Blur] Error reading stats from Redis | slug=${slug}`);
+  // Check LRU cache first (Phase 3 migration - 30s TTL)
+  const cachedStats = blurStatsLRU.get(slugLower);
+  if (cachedStats !== undefined) {
+    return cachedStats;
   }
 
-  // If not in cache, try to acquire lock and fetch
-  const result = await lockManager.withLock(lockKey, async () => {
+  // Check if fetch already in progress (in-flight Map pattern - Phase 4 migration)
+  let inFlightPromise = statsFetchInFlight.get(lockKey);
 
-    const redis = redisClient.getClient();
-    if (redis) {
-      const cachedStats = await redis.get(cacheKey);
-      if (cachedStats) {
-        return JSON.parse(cachedStats);
+  if (!inFlightPromise) {
+    // Create new fetch operation
+    inFlightPromise = (async () => {
+      try {
+        // Double-check cache after starting fetch
+        const cachedStatsAfterLock = blurStatsLRU.get(slugLower);
+        if (cachedStatsAfterLock !== undefined) {
+          return cachedStatsAfterLock;
+        }
+
+        try {
+          const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
+          const { data } = await apiDedup(
+            `blur-stats-${slug}`,
+            () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<BlurTokensResponse>(url, {
+              headers: {
+                'content-type': 'application/json',
+                'x-api-key': API_KEY,
+              },
+              timeout: 60000
+            })),
+            { category: 'Blur' }
+          );
+
+          const listings = data?.tokens?.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
+          const floor_price = Number(listings[0]?.price?.amount) || 0;
+
+          // Cache in LRU (Phase 3 migration - 30s TTL)
+          blurStatsLRU.set(slugLower, floor_price);
+
+          return floor_price || 0;
+        } catch (error: any) {
+          const status = error?.response?.status;
+          if (status === 400 || status === 404) {
+            // Collection doesn't exist on Blur - cache this for 1 hour
+            markCollectionUnavailable('blur', slug, status);
+            return 0;
+          }
+          // Only log unexpected errors
+          errorLog('Collection', `[Blur] API error | slug=${slug} | status=${status}`, error);
+          return 0;
+        }
+      } finally {
+        // Remove from in-flight tracking
+        statsFetchInFlight.delete(lockKey);
       }
-    }
+    })();
 
-    try {
-      const url = `${BASE_URL}/blur/v1/collections/${slug}/tokens`;
-      const { data } = await apiDedup(
-        `blur-stats-${slug}`,
-        () => limiter.schedule(priority !== undefined ? { priority } : {}, () => axiosInstance.get<BlurTokensResponse>(url, {
-          headers: {
-            'content-type': 'application/json',
-            'x-api-key': API_KEY,
-          },
-          timeout: 60000
-        })),
-        { category: 'Blur' }
-      );
+    statsFetchInFlight.set(lockKey, inFlightPromise);
+  }
 
-      const listings = data?.tokens?.sort((a, b) => Number(a?.price?.amount) - Number(b?.price?.amount));
-      const floor_price = Number(listings[0]?.price?.amount) || 0;
-
-      if (redis) {
-        await redis.set(cacheKey, JSON.stringify(floor_price), 'EX', CACHE_TTL);
-      }
-      return floor_price || 0;
-    } catch (error: any) {
-      const status = error?.response?.status;
-      if (status === 400 || status === 404) {
-        // Collection doesn't exist on Blur - cache this for 1 hour
-        await markCollectionUnavailable('blur', slug, status);
-        return 0;
-      }
-      // Only log unexpected errors
-      errorLog('Collection', `[Blur] API error | slug=${slug} | status=${status}`, error);
-      return 0;
-    }
-
-  });
+  // Wait for fetch to complete (either new or in-progress)
+  const result = await inFlightPromise;
 
   if (!result) {
     return 0
@@ -1304,4 +1263,12 @@ export function getTimeoutMetrics() {
       ? (timeoutMetrics.successAfterRetry / timeoutMetrics.total408Errors) * 100
       : 0,
   };
+}
+
+/**
+ * Get cache instances for debugging/monitoring
+ * @internal - For use by lru-cache-sampler.ts only
+ */
+export function getBlurInsufficientBalanceLogCache(): LRUCache<string, boolean> {
+  return insufficientBalanceLogCache;
 }

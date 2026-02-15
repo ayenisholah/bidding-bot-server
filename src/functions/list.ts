@@ -2,8 +2,8 @@ import { config } from "dotenv";
 import { IListing } from "../types/listing.types";
 import { NETWORK, BASE_URL } from "../constants";
 import { decryptPrivateKey } from "../utils/crypto";
-import { AlchemyProvider, Wallet as Web3Wallet } from "ethers";
-import { getOpenseaFloor } from "./collection";
+import { JsonRpcProvider, Wallet as Web3Wallet } from "ethers";
+import { getCachedFloorPrice } from "../utils/collection-cache";
 import { errorLog, warnLog } from "../utils/debug-file-logger";
 import { updateListingExpiration } from "./relistExpired";
 import Listing from "../models/listing.model";
@@ -17,11 +17,9 @@ import { API_KEY } from "..";
 import { getOpenseaTraitFloor } from "../utils/opensea-trait-floor";
 import { getTraitFilteredListings } from "../functions/tokenMetadata";
 import { apiDedup } from "../utils/api-dedup";
+import { mainProvider as provider } from '../utils/provider';
 
 config()
-
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
-const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
 
 export async function createListing(data: IListing) {
   // console.log(BLUE + `[LISTING - Create] Token ID: ${data.tokenId}` + RESET);
@@ -187,7 +185,7 @@ export async function createListing(data: IListing) {
             // console.log(`Using trait floor for ${freshData.selectedTrait.trait_type}:${freshData.selectedTrait.value}`);
             floorPrice = await getOpenseaTraitFloor(freshData.contract.slug, freshData.selectedTrait.trait_type, freshData.selectedTrait.value);
           } else {
-            floorPrice = await getOpenseaFloor(freshData.contract.slug);
+            floorPrice = await getCachedFloorPrice(freshData.contract.slug);
           }
 
           if (listingPrice < floorPrice) {
@@ -249,7 +247,7 @@ export async function createListing(data: IListing) {
               // console.log(`[LISTING - FLOOR MATCH] Using trait floor for ${freshData.selectedTrait.trait_type}:${freshData.selectedTrait.value}`);
               floorPrice = await getOpenseaTraitFloor(freshData.contract.slug, freshData.selectedTrait.trait_type, freshData.selectedTrait.value);
             } else {
-              floorPrice = await getOpenseaFloor(freshData.contract.slug);
+              floorPrice = await getCachedFloorPrice(freshData.contract.slug);
             }
 
             listingPrice = roundToNineDecimals(floorPrice);
@@ -413,7 +411,7 @@ async function calculateListingPrice(data: IListing, marketplace: 'opensea' | 'b
       // console.log(`Using trait floor for ${data.selectedTrait.trait_type}:${data.selectedTrait.value}`);
       floorPrice = await getOpenseaTraitFloor(data.contract.slug, data.selectedTrait.trait_type, data.selectedTrait.value);
     } else {
-      floorPrice = await getOpenseaFloor(data.contract.slug);
+      floorPrice = await getCachedFloorPrice(data.contract.slug);
     }
 
     if (calculatedPrice < floorPrice) {

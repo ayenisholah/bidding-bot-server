@@ -1,6 +1,6 @@
 import { DistributedLockManager } from './lock';
 import { ITask } from '../models/task.model';
-import { errorLog, debugLog } from './debug-file-logger';
+import { errorLog} from './debug-file-logger';
 
 export type TaskStatus = 'STARTED' | 'RUNNING' | 'COMPLETED' | 'SCHEDULED' | 'CANCELLING' | 'STOPPED' | 'PROCESSING';
 
@@ -198,7 +198,6 @@ export class TaskStateManager {
 
 // console.log(`  Task state initialized successfully`);
 // console.log(`  Initial state: ${JSON.stringify(initialState, null, 2)}`);
-debugLog('TaskState', `Initialized task state | taskId=${taskId} | totalTasksInManager=${this.taskStatus.size}`, { taskId });
       } else {
         // const existingState = this.taskStatus.get(taskId);
 // console.log(`  Task already exists in state manager`);

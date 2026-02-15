@@ -2,7 +2,7 @@ import { axiosInstance, limiter } from '../init';
 import { BASE_URL } from '../constants';
 import { API_KEY } from '..';
 import { tokenTraitCache, TokenTrait, TokenTraitData } from '../utils/token-trait-cache';
-import { errorLog, debugLog, warnLog } from '../utils/debug-file-logger';
+import { errorLog, warnLog } from '../utils/debug-file-logger';
 import { apiDedup } from '../utils/api-dedup';
 
 // GraphQL queries
@@ -147,7 +147,6 @@ export async function fetchTokenMetadata(
       // DEBUG: Log why the API returned no item data
       const responseKeys = Object.keys(response.data || {}).join(',') || 'empty';
       const dataKeys = Object.keys(response.data?.data || {}).join(',') || 'empty';
-      debugLog('Metadata', `fetchTokenMetadata: API returned NULL item | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | responseKeys=[${responseKeys}] | dataKeys=[${dataKeys}]`);
       return null;
     }
 
@@ -179,14 +178,11 @@ export async function fetchTokenMetadata(
     if (error.response?.status === 400) {
       // DEBUG: Log 400 errors with error message
       const errorMsg = error.response?.data?.message || error.response?.data?.error || error.response?.data?.errors?.[0] || 'unknown';
-      debugLog('Metadata', `fetchTokenMetadata: HTTP 400 | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | errorMsg=${JSON.stringify(errorMsg).slice(0, 200)}`);
     } else if (error.response?.status) {
       // Log other HTTP errors
-      debugLog('Metadata', `fetchTokenMetadata: HTTP ${error.response.status} | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | errorMsg=${error.message}`);
       errorLog('Metadata', `Failed to fetch token metadata | contractAddress=${contractAddress} | tokenId=${tokenId}`, error);
     } else {
       // Network/timeout errors
-      debugLog('Metadata', `fetchTokenMetadata: Network Error | contract=${contractAddress.slice(0, 10)}... | tokenId=${tokenId} | errorCode=${error.code || 'unknown'} | errorMsg=${error.message}`);
       errorLog('Metadata', `Failed to fetch token metadata | contractAddress=${contractAddress} | tokenId=${tokenId}`, error);
     }
 

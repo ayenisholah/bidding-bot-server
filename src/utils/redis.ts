@@ -1,5 +1,5 @@
 import { config } from 'dotenv';
-import Redis from 'ioredis';
+import Redis, { Cluster, ClusterNode } from 'ioredis';
 import { errorLog, warnLog } from './debug-file-logger';
 
 config()
@@ -9,174 +9,91 @@ let redisConfigLogged = false;
 
 // Read Redis configuration at runtime to ensure Docker env vars are available
 export const getRedisConfig = () => {
+  // Check for cluster nodes (JSON array) - takes precedence
+  const redisNodesEnv = process.env.REDIS_NODES;
+
+  if (redisNodesEnv) {
+    try {
+      const nodes = JSON.parse(redisNodesEnv);
+      if (Array.isArray(nodes) && nodes.length >= 3) {
+        // Only log config once to avoid duplicate log entries
+        if (!redisConfigLogged) {
+          console.log(`[Redis] Cluster Configuration: ${nodes.length} nodes | env=${process.env.NODE_ENV}`);
+          redisConfigLogged = true;
+        }
+        return { cluster: true, nodes };
+      } else {
+        warnLog('Redis', `REDIS_NODES must be an array with at least 3 nodes, got ${nodes?.length || 0}. Falling back to single instance.`);
+      }
+    } catch (error) {
+      warnLog('Redis', `Failed to parse REDIS_NODES: ${error instanceof Error ? error.message : String(error)}. Falling back to single instance.`);
+    }
+  }
+
+  // Fallback to single instance (current behavior)
   const host = process.env.REDIS_HOST || 'localhost';
   const port = parseInt(process.env.REDIS_PORT || '6379', 10);
 
   // In production Docker environment, ensure we use the service name
   if (process.env.NODE_ENV === 'production' && host === 'localhost') {
     warnLog('Redis', 'Production environment detected but REDIS_HOST not set, using "redis" service name');
-    return { host: 'redis', port };
+    return { cluster: false, host: 'redis', port };
   }
 
   // Only log config once to avoid duplicate log entries
   if (!redisConfigLogged) {
-    console.log(`[Redis] Configuration: host=${host}, port=${port}, env=${process.env.NODE_ENV}`);
+    console.log(`[Redis] Single Instance Configuration: host=${host}, port=${port}, env=${process.env.NODE_ENV}`);
     redisConfigLogged = true;
   }
-  return { host, port };
+  return { cluster: false, host, port };
 };
 
 const RETRY_MAX_ATTEMPTS = 30;
 const INITIAL_RETRY_DELAY = 2000;
 
-const getDefaultConfig = () => {
-  const { host, port } = getRedisConfig();
-  return {
-    host,
-    port,
-    maxRetriesPerRequest: null,
-    retryStrategy: (times: number) => {
-      if (times > RETRY_MAX_ATTEMPTS) {
-        return null;
-      }
-      const delay = Math.min(times * INITIAL_RETRY_DELAY, 20000);
-      return delay;
-    },
-    enableReadyCheck: true,
-    connectTimeout: 60000,
-    // Add memory optimization settings
-    dropBufferSupport: true,
-    showFriendlyErrorStack: true,
-    enableOfflineQueue: false,
-    reconnectOnError: (err: Error) => {
-      const targetErrors = ['READONLY', 'ECONNRESET', 'ETIMEDOUT', 'ECONNREFUSED'];
-      return targetErrors.some(errType => err.message.includes(errType));
-    }
-  };
-};
 
+/**
+ * DEPRECATED: RedisClient class removed
+ *
+ * Redis is now BullMQ-only. All non-BullMQ Redis usage has been migrated to in-memory LRU caches.
+ * Use createBullMQConnection() for BullMQ queue connections.
+ *
+ * Migration completed: 2026-02-06
+ * - Distributed locks: Migrated to in-memory LRU cache (lock.ts)
+ * - Health monitoring: Use checkBullMQConnectionsHealth() instead
+ * - General Redis access: No longer needed
+ */
+
+// DEPRECATED: Kept for backwards compatibility during migration
+// These exports will throw errors if used, forcing code to be updated
 class RedisClient {
-  private static _instance: RedisClient;
-  private client: Redis | null = null;
-  private isConnected: boolean = false;
-  private connectionAttempts: number = 0;
-  private readonly maxConnectionAttempts = 10;
-  private connecting: boolean = false;
-
-  // Getter for instance
-  static get instance(): RedisClient | undefined {
-    return RedisClient._instance;
+  public static getInstance(): never {
+    throw new Error('RedisClient.getInstance() is deprecated - Redis is BullMQ-only. Use createBullMQConnection() for BullMQ connections.');
   }
 
-  private constructor() {
-    this.connect();
+  public getClient(): never {
+    throw new Error('redisClient.getClient() is deprecated - Redis is BullMQ-only. Use createBullMQConnection() for BullMQ connections.');
   }
 
-  public static getInstance(): RedisClient {
-    if (!RedisClient._instance) {
-      RedisClient._instance = new RedisClient();
-    }
-    return RedisClient._instance;
-  }
-
-  private async connect() {
-    if (this.connecting || this.isConnected) {
-      return;
-    }
-
-    this.connecting = true;
-
-    if (!this.client) {
-      try {
-        const config = getDefaultConfig();
-        console.log(`[Redis] Connecting to ${config.host}:${config.port}...`);
-        
-        this.client = new Redis({
-          ...config,
-          lazyConnect: true,
-          enableAutoPipelining: false,
-        });
-
-        this.setupEventHandlers();
-
-        // Explicitly connect after setup
-        await this.client.connect();
-      } catch (error) {
-        this.isConnected = false;
-        this.client = null;
-
-        errorLog('Database', `[Redis] Failed to connect | attempts=${this.connectionAttempts}/${this.maxConnectionAttempts}`, error);
-
-        if (this.connectionAttempts < this.maxConnectionAttempts) {
-          this.connectionAttempts++;
-          setTimeout(() => {
-            this.connecting = false;
-            this.connect();
-          }, 5000);
-        } else {
-          this.connecting = false;
-          throw error;
-        }
-      }
-    }
-  }
-
-  private setupEventHandlers() {
-    if (!this.client) return;
-
-    // Add connection pool monitoring
-    this.client.on('ready', () => {
-      this.isConnected = true;
-      this.connecting = false;
-      this.connectionAttempts = 0;
-      // console.log('[Redis] Connection established');
-    });
-
-    this.client.on('error', async (err) => {
-      errorLog('Database', `[Redis] Connection error | attempts=${this.connectionAttempts}`, err);
-      this.isConnected = false;
-      if (!this.connecting && this.connectionAttempts < this.maxConnectionAttempts) {
-        this.connectionAttempts++;
-        setTimeout(() => this.connect(), 5000);
-      }
-    });
-
-    // Add periodic health check
-    setInterval(() => {
-      if (this.isConnected && this.client) {
-        this.client.ping().catch(async err => {
-          warnLog('Database', `[Redis] Health check ping failed | ${err.message}`);
-          this.isConnected = false;
-          this.connect();
-        });
-      }
-    }, 30000);
-  }
-
-  public getClient(): Redis {
-    if (!this.client) {
-      this.connect();
-    }
-    return this.client!;
-  }
-
-  public isReady(): boolean {
-    return this.isConnected;
+  public isReady(): never {
+    throw new Error('redisClient.isReady() is deprecated - use checkBullMQConnectionsHealth() instead.');
   }
 }
 
-const redisClient = RedisClient.getInstance();
+const redisClient = new RedisClient();
 
-// Export both the client instance and a getter for the actual Redis connection
+// DEPRECATED: These exports will throw errors if used
 export default redisClient;
-export const getRedisConnection = () => redisClient.getClient();
+export const getRedisConnection = (): never => {
+  throw new Error('getRedisConnection() is deprecated - Redis is BullMQ-only. Use createBullMQConnection() for BullMQ connections.');
+};
 
 // Connection tracking for BullMQ
-const bullMQConnections = new Map<string, { redis: Redis; createdAt: number; lastHealthCheck: number }>();
+const bullMQConnections = new Map<string, { redis: Redis | Cluster; createdAt: number; lastHealthCheck: number }>();
 let connectionIdCounter = 0;
 
 // Create a new Redis connection for BullMQ with enhanced configuration
-export const createBullMQConnection = async (identifier?: string): Promise<Redis> => {
+export const createBullMQConnection = async (identifier?: string): Promise<Redis | Cluster> => {
   const connectionId = identifier || `bullmq-${++connectionIdCounter}`;
   // console.log(`[Redis] Creating BullMQ connection: ${connectionId}`);
 
@@ -190,12 +107,13 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
     // console.log(`[Redis] ${connectionId} is a ${isQueueEvents ? 'queue events' : 'worker'} connection - using blocking command configuration`);
   }
 
+
   try {
-    const { host, port } = getRedisConfig();
-    const redis = new Redis({
-      host,
-      port,
-      
+    const config = getRedisConfig();
+    let redis: Redis | Cluster;
+
+    // Base Redis options (common to both single instance and cluster)
+    const baseRedisOptions = {
       // Retry strategy
       retryStrategy: (times: number) => {
         if (times > RETRY_MAX_ATTEMPTS) {
@@ -230,7 +148,29 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
 
       // Show friendly error messages
       showFriendlyErrorStack: true,
-    });
+    };
+
+    if ('cluster' in config && config.cluster) {
+      // Redis Cluster mode
+      redis = new Redis.Cluster(config.nodes as ClusterNode[], {
+        redisOptions: baseRedisOptions,
+        // Cluster-specific options
+        scaleReads: 'slave',  // Read from replicas when possible
+        maxRedirections: 16,
+        retryDelayOnFailover: 100,
+        retryDelayOnClusterDown: 300,
+        slotsRefreshTimeout: 2000,
+      });
+      // console.log(`[Redis] Created cluster connection ${connectionId} with ${config.nodes.length} nodes`);
+    } else {
+      // Single instance mode (existing code)
+      redis = new Redis({
+        host: config.host,
+        port: config.port,
+        ...baseRedisOptions,
+      });
+      // console.log(`[Redis] Created single instance connection ${connectionId} to ${config.host}:${config.port}`);
+    }
 
     // Set up event handlers before connecting
     redis.on('error', async (err) => {
@@ -349,16 +289,38 @@ export const getBullMQConnections = () => {
 
 // Health check for all BullMQ connections
 export const checkBullMQConnectionsHealth = async () => {
-  const results: { [key: string]: { healthy: boolean; error?: string } } = {};
+  const results: { [key: string]: { healthy: boolean; error?: string; mode?: string } } = {};
 
   for (const [id, info] of bullMQConnections.entries()) {
     try {
-      await info.redis.ping();
+      // Check if this is a cluster connection
+      const isCluster = 'isCluster' in info.redis && info.redis.isCluster;
+
+      if (isCluster) {
+        // For cluster, check cluster info command
+        const clusterInfo = await info.redis.call('CLUSTER', 'INFO') as string;
+        const isHealthy = clusterInfo.includes('cluster_state:ok');
+
+        if (!isHealthy) {
+          warnLog('Redis', `Cluster ${id} is not healthy: ${clusterInfo.split('\n')[0]}`);
+        }
+
+        results[id] = {
+          healthy: isHealthy,
+          mode: 'cluster',
+          ...(isHealthy ? {} : { error: 'Cluster state not OK' })
+        };
+      } else {
+        // For single instance, use ping
+        await info.redis.ping();
+        results[id] = { healthy: true, mode: 'single' };
+      }
+
       info.lastHealthCheck = Date.now();
-      results[id] = { healthy: true };
     } catch (error) {
       results[id] = {
         healthy: false,
+        mode: 'isCluster' in info.redis && info.redis.isCluster ? 'cluster' : 'single',
         error: error instanceof Error ? error.message : 'Unknown error'
       };
     }
@@ -416,13 +378,13 @@ export const withRedisRetry = async <T>(
   maxRetries: number = 3
 ): Promise<T | null> => {
   let lastError: Error | null = null;
-  
+
   for (let attempt = 1; attempt <= maxRetries; attempt++) {
     try {
       return await operation();
     } catch (error: any) {
       lastError = error;
-      
+
       // Check if it's a redis error
       if (isRedisError(error)) {
         warnLog('Redis', `Error in ${context} (attempt ${attempt}/${maxRetries}): ${error.message}`);
@@ -432,7 +394,7 @@ export const withRedisRetry = async <T>(
           errorLog('Redis', `Max retries reached for ${context}`);
           return null;
         }
-        
+
         // Exponential backoff
         const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
         // console.log(`[Redis] Retrying ${context} after ${delay}ms...`);

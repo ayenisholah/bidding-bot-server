@@ -4,11 +4,13 @@ import axiosRetry, { IAxiosRetryConfig } from "axios-retry";
 import { config } from "dotenv";
 import { RATE_LIMIT, rps } from ".";
 import { wrapAxiosInstance, jobContext } from "./utils/axios-wrapper";
+import { warnLog, errorLog } from "./utils/debug-file-logger";
 
 config()
 
 // Debug logging controlled by single environment variable
 const DEBUG = process.env.DEBUG === 'true';
+export const DEBUG_VERBOSE = process.env.DEBUG_VERBOSE === 'true';
 
 let limiter: Bottleneck;
 let axiosInstance: AxiosInstance;
@@ -22,7 +24,8 @@ const RPS_HISTORY_SECONDS = 10; // Keep a 10-second history for averaging
 const retryConfig: IAxiosRetryConfig = {
   retries: 3,
   retryDelay: (retryCount, error) => {
-    limiter.schedule(() => Promise.resolve());
+    // Retry timing is controlled by the return value below
+    // (retries happen inside the original limiter.schedule() callback, so they already bypass the limiter)
 
     // Special handling for 408 errors
     if (error.response?.status === 408) {
@@ -90,8 +93,10 @@ const retryConfig: IAxiosRetryConfig = {
       return true; // Network errors
     }
     const status = error.response.status;
-    // Retry: rate limits (429/430), timeout (408), Cloudflare (520), gateway errors (502/504)
-    return status === 429 || status === 430 || status === 408 || status === 520 || status === 502 || status === 504;
+    // Retry: timeout (408), rate limits (429/430), server errors (500/503), gateway errors (502/504), Cloudflare (520)
+    return status === 408 || status === 429 || status === 430 ||
+           status === 500 || status === 502 || status === 503 ||
+           status === 504 || status === 520;
   },
   onRetry: (_retryCount, _error, _requestConfig) => {
     // Only log retries in development mode or for specific debugging
@@ -102,11 +107,16 @@ const retryConfig: IAxiosRetryConfig = {
 };
 
 async function initialize(rateLimit: number) {
-  axiosInstance = axios.create({ timeout: 60000 });
+  axiosInstance = axios.create({ timeout: 30000 });
+  const concurrency = rateLimit
 
   limiter = new Bottleneck({
-    minTime: 1000 / rateLimit, // Minimum time between job starts
+    minTime: 1000 / concurrency, // Minimum time between job starts
     trackDoneStatus: true,
+    // Reservoir system to maintain steady job flow and prevent queue drain
+    // reservoir: rateLimit * 3, // Initial reservoir: 3x rate limit for buffer
+    // reservoirRefreshAmount: rateLimit * 1.5, // Aggressive refill: 1.5x rate limit per second
+    // reservoirRefreshInterval: 1000, // Refill every 1 second to maintain constant flow
   });
 
   axiosRetry(axiosInstance, retryConfig);
@@ -131,6 +141,16 @@ export function getLimiterCounts() {
   return limiter.counts();
 }
 
+/**
+ * Get current queue depth (total jobs in limiter).
+ * Quick helper to check queue size without calling getLimiterCounts().
+ */
+export function getQueueDepth(): number {
+  if (!limiter) return 0;
+  const counts = getLimiterCounts();
+  return (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+}
+
 // Get detailed limiter queue state for debugging stopTask flow
 export function getLimiterQueueDetails(rateLimit: number): {
   counts: ReturnType<typeof getLimiterCounts>;
@@ -145,6 +165,138 @@ export function getLimiterQueueDetails(rateLimit: number): {
     counts,
     jobsInQueue,
     estimatedDrainTimeMs
+  };
+}
+
+// Queue depth thresholds for proactive refill
+const QUEUE_MINIMUM = RATE_LIMIT * 2; // HARD MINIMUM: Always maintain at least 2x rate limit jobs in queue
+const QUEUE_LOW_WATER_MARK = RATE_LIMIT * 2.5; // Refill trigger: Add jobs when below 2.5x rate limit
+const QUEUE_TARGET = RATE_LIMIT * 3; // Target queue depth for smooth operation (3x rate limit)
+const QUEUE_HIGH_WATER_MARK = RATE_LIMIT * 5; // Stop adding when queue exceeds 5x rate limit
+
+/**
+ * Check if the limiter queue needs refilling to maintain steady RPS.
+ * Returns true when queue depth drops below low water mark (2.5x rate limit).
+ */
+export function shouldRefillQueue(): boolean {
+  if (!limiter) return false;
+
+  const counts = getLimiterCounts();
+  const queueDepth = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+
+  return queueDepth < QUEUE_LOW_WATER_MARK;
+}
+
+/**
+ * Check if queue is below HARD MINIMUM (2x rate limit).
+ * This is CRITICAL - queue should NEVER drop below this threshold.
+ */
+export function isBelowMinimum(): boolean {
+  if (!limiter) return false;
+
+  const counts = getLimiterCounts();
+  const queueDepth = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+
+  return queueDepth < QUEUE_MINIMUM;
+}
+
+/**
+ * Check if the queue is too full and should pause adding new jobs.
+ * Returns true when queue depth exceeds high water mark.
+ */
+export function shouldPauseQueueing(): boolean {
+  if (!limiter) return false;
+
+  const counts = getLimiterCounts();
+  const queueDepth = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+
+  return queueDepth > QUEUE_HIGH_WATER_MARK;
+}
+
+/**
+ * Get recommended number of jobs to add to reach target queue depth.
+ * Returns 0 if queue is at or above target.
+ *
+ * If below MINIMUM: returns jobs needed to reach TARGET (aggressive refill)
+ * If below LOW_WATER: returns jobs needed to reach TARGET
+ * Otherwise: returns 0
+ */
+export function getRecommendedRefillCount(): number {
+  if (!limiter) return 0;
+
+  const counts = getLimiterCounts();
+  const queueDepth = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+
+  // If at or above target, no refill needed
+  if (queueDepth >= QUEUE_TARGET) return 0;
+
+  // Calculate jobs needed to reach target
+  const jobsNeeded = Math.ceil(QUEUE_TARGET - queueDepth);
+
+  // If below minimum, this is URGENT - return full amount needed
+  if (queueDepth < QUEUE_MINIMUM) {
+    return jobsNeeded;
+  }
+
+  // If below low water mark, refill to target
+  if (queueDepth < QUEUE_LOW_WATER_MARK) {
+    return jobsNeeded;
+  }
+
+  // Between low water and target - no urgent need
+  return 0;
+}
+
+/**
+ * Get current queue health metrics for monitoring.
+ */
+export function getQueueHealth(): {
+  queueDepth: number;
+  minimumDepth: number;
+  targetDepth: number;
+  lowWaterMark: number;
+  highWaterMark: number;
+  isBelowMinimum: boolean;
+  needsRefill: boolean;
+  shouldPause: boolean;
+  recommendedRefillCount: number;
+  utilizationPercent: number;
+  status: 'CRITICAL' | 'LOW' | 'HEALTHY' | 'HIGH' | 'OVERLOADED';
+} {
+  const counts = getLimiterCounts();
+  const queueDepth = (counts.RECEIVED || 0) + (counts.QUEUED || 0) + (counts.RUNNING || 0);
+  const belowMinimum = isBelowMinimum();
+  const needsRefill = shouldRefillQueue();
+  const shouldPause = shouldPauseQueueing();
+  const recommendedRefillCount = getRecommendedRefillCount();
+  const utilizationPercent = Math.round((queueDepth / QUEUE_HIGH_WATER_MARK) * 100);
+
+  // Determine queue status
+  let status: 'CRITICAL' | 'LOW' | 'HEALTHY' | 'HIGH' | 'OVERLOADED';
+  if (queueDepth < QUEUE_MINIMUM) {
+    status = 'CRITICAL';
+  } else if (queueDepth < QUEUE_LOW_WATER_MARK) {
+    status = 'LOW';
+  } else if (queueDepth > QUEUE_HIGH_WATER_MARK) {
+    status = 'OVERLOADED';
+  } else if (queueDepth > QUEUE_TARGET * 1.2) {
+    status = 'HIGH';
+  } else {
+    status = 'HEALTHY';
+  }
+
+  return {
+    queueDepth,
+    minimumDepth: QUEUE_MINIMUM,
+    targetDepth: QUEUE_TARGET,
+    lowWaterMark: QUEUE_LOW_WATER_MARK,
+    highWaterMark: QUEUE_HIGH_WATER_MARK,
+    isBelowMinimum: belowMinimum,
+    needsRefill,
+    shouldPause,
+    recommendedRefillCount,
+    utilizationPercent,
+    status
   };
 }
 
@@ -170,6 +322,12 @@ export function stopCountsLogger() {
     // console.log('Stopped logging limiter counts');
   }
 }
+// Track low queue warnings to avoid log spam
+let lowQueueWarningCount = 0;
+let criticalQueueWarningCount = 0;
+let lastLowQueueWarning = 0;
+let lastCriticalQueueWarning = 0;
+
 setInterval(() => {
   const counts = getLimiterCounts();
   // Calculate instantaneous RPS based on completed requests
@@ -196,14 +354,205 @@ setInterval(() => {
 
   rps.currentRPS = trueRPS
 
+  // Monitor queue health and warn when refill needed
+  const queueDepth = executing;
+  const health = getQueueHealth();
+  const now = Date.now();
+
+  // CRITICAL: Queue below HARD MINIMUM (2x rate limit)
+  if (health.isBelowMinimum) {
+    // Log immediately - this is critical
+    if (now - lastCriticalQueueWarning > 2000) { // Every 2 seconds for critical issues
+      criticalQueueWarningCount++;
+      lastCriticalQueueWarning = now;
+      errorLog('LimiterQueue', `CRITICAL_QUEUE_BELOW_MINIMUM | depth=${queueDepth} | minimum=${QUEUE_MINIMUM} | target=${QUEUE_TARGET} | recommendedRefill=${health.recommendedRefillCount} | status=${health.status} | criticalCount=${criticalQueueWarningCount}`);
+    }
+  }
+  // LOW: Queue below low water mark (2.5x rate limit)
+  else if (health.needsRefill) {
+    // Only log warning every 5 seconds to avoid spam
+    if (now - lastLowQueueWarning > 5000) {
+      lowQueueWarningCount++;
+      lastLowQueueWarning = now;
+      warnLog('LimiterQueue', `LOW_QUEUE_DEPTH | depth=${queueDepth} | lowWaterMark=${QUEUE_LOW_WATER_MARK} | target=${QUEUE_TARGET} | recommendedRefill=${health.recommendedRefillCount} | status=${health.status} | warningCount=${lowQueueWarningCount}`);
+    }
+  }
+  // HEALTHY or HIGH: Reset warning counters
+  else {
+    // Reset warning count when queue is healthy
+    if ((lowQueueWarningCount > 0 || criticalQueueWarningCount > 0) && queueDepth >= QUEUE_TARGET) {
+      lowQueueWarningCount = 0;
+      criticalQueueWarningCount = 0;
+    }
+  }
+
 }, 1000);
 
 // Task blacklist for preventing stopped tasks from executing
 // Now supports marketplace-specific blacklisting
 const taskBlacklist = new Map<string, Set<string>>();
 
+// Fix 5: Cache for blacklist checks to reduce redundant lookups
+// Cache TTL of 100ms - checks within the same millisecond window return cached result
+interface BlacklistCacheEntry {
+  result: boolean;
+  timestamp: number;
+}
+const blacklistCheckCache = new Map<string, BlacklistCacheEntry>();
+const BLACKLIST_CACHE_TTL = 100; // 100ms cache
+
+// ============================================
+// PENDING LIMITER JOB TRACKING (for abort capability)
+// ============================================
+
+/**
+ * Tracks pending limiter jobs by taskId for abort capability.
+ * When a task is stopped, we can reject all its pending jobs immediately
+ * instead of letting them waste rate limit slots.
+ */
+interface PendingLimiterJob {
+  taskId: string;
+  marketplace: string;
+  reject: (reason: Error) => void;
+  jobId: string;
+  controller: AbortController;
+  queuedAt: number;
+}
+
+// Map taskId -> Set of pending jobs
+const pendingLimiterJobs = new Map<string, Set<PendingLimiterJob>>();
+
+/**
+ * Schedule a function through the rate limiter with abort capability.
+ * Jobs can be aborted when a task is stopped via abortPendingLimiterJobs().
+ *
+ * @param taskId - Task ID for tracking/abort
+ * @param marketplace - Marketplace for logging
+ * @param fn - Function to execute (receives optional AbortSignal)
+ * @param jobId - Optional job ID for logging (defaults to generated ID)
+ * @returns Promise that resolves with function result or rejects if aborted
+ */
+export async function scheduleWithAbort<T>(
+  taskId: string,
+  marketplace: string,
+  fn: (signal?: AbortSignal) => Promise<T>,
+  jobId?: string
+): Promise<T> {
+  // Early blacklist check before even queueing
+  if (isTaskBlacklisted(taskId, marketplace)) {
+    throw new Error(`Task ${taskId} is blacklisted for ${marketplace}`);
+  }
+
+  const controller = new AbortController();
+  const actualJobId = jobId || `${taskId}-${marketplace}-${Date.now()}`;
+
+  return new Promise<T>((resolve, reject) => {
+    const pendingJob: PendingLimiterJob = {
+      taskId,
+      marketplace,
+      reject,
+      jobId: actualJobId,
+      controller,
+      queuedAt: Date.now()
+    };
+
+    // Add to pending tracking
+    if (!pendingLimiterJobs.has(taskId)) {
+      pendingLimiterJobs.set(taskId, new Set());
+    }
+    pendingLimiterJobs.get(taskId)!.add(pendingJob);
+
+    limiter.schedule({ id: actualJobId }, async () => {
+      // Remove from pending tracking since we're now executing
+      pendingLimiterJobs.get(taskId)?.delete(pendingJob);
+
+      // Check blacklist again after dequeue (task may have been stopped while waiting)
+      if (isTaskBlacklisted(taskId, marketplace)) {
+        throw new Error(`Task ${taskId} aborted - blacklisted while in limiter queue`);
+      }
+
+      // Check if we were aborted while waiting in queue
+      if (controller.signal.aborted) {
+        throw new Error(`Task ${taskId} aborted - signal triggered`);
+      }
+
+      // Execute the actual function, passing the signal for HTTP abort capability
+      return fn(controller.signal);
+    })
+      .then((result) => {
+        resolve(result);
+      })
+      .catch((err) => {
+        // Clean up in case of error (may already be deleted if aborted)
+        pendingLimiterJobs.get(taskId)?.delete(pendingJob);
+        reject(err);
+      });
+  });
+}
+
+/**
+ * Abort all pending limiter jobs for a task.
+ * Called during stopTask() to immediately cancel jobs waiting in the limiter queue.
+ *
+ * @param taskId - Task ID to abort jobs for
+ * @returns Number of jobs aborted
+ */
+export function abortPendingLimiterJobs(taskId: string): number {
+  const pending = pendingLimiterJobs.get(taskId);
+  if (!pending || pending.size === 0) {
+    return 0;
+  }
+
+
+  let abortedCount = 0;
+  const marketplaceCounts: Record<string, number> = {};
+
+  for (const job of pending) {
+    try {
+      // Abort the controller (will cancel HTTP request if in flight)
+      job.controller.abort();
+
+      // Reject the promise
+      job.reject(new Error(`Task ${taskId} stopped - limiter job aborted`));
+
+      abortedCount++;
+      marketplaceCounts[job.marketplace] = (marketplaceCounts[job.marketplace] || 0) + 1;
+    } catch (err) {
+      errorLog('StopBlacklist', `LIMITER_ABORT_ERROR | taskId=${taskId} | jobId=${job.jobId}`, err);
+    }
+  }
+
+  // Clear the set
+  pendingLimiterJobs.delete(taskId);
+  return abortedCount;
+}
+
+/**
+ * Get count of pending limiter jobs for a task.
+ * Useful for monitoring and debugging.
+ */
+export function getPendingLimiterJobCount(taskId: string): number {
+  return pendingLimiterJobs.get(taskId)?.size || 0;
+}
+
+/**
+ * Get all pending limiter job counts by task.
+ * Returns a summary object for monitoring.
+ */
+export function getAllPendingLimiterJobs(): { taskId: string; count: number; marketplaces: string[] }[] {
+  const result: { taskId: string; count: number; marketplaces: string[] }[] = [];
+  for (const [taskId, jobs] of pendingLimiterJobs) {
+    const marketplaces = [...new Set([...jobs].map(j => j.marketplace))];
+    result.push({ taskId, count: jobs.size, marketplaces });
+  }
+  return result;
+}
+
 export function cancelTaskJobs(taskId: string, marketplace?: string) {
-  if (!limiter) return { cancelled: 0, blacklisted: false };
+  if (!limiter) {
+    warnLog('StopBlacklist', `BLACKLIST_NO_LIMITER | taskId=${taskId} | limiterNotInitialized=true`);
+    return { cancelled: 0, blacklisted: false };
+  }
 
   // Add to blacklist to prevent new jobs
   if (!taskBlacklist.has(taskId)) {
@@ -213,34 +562,38 @@ export function cancelTaskJobs(taskId: string, marketplace?: string) {
   if (marketplace) {
     // Marketplace-specific blacklist
     taskBlacklist.get(taskId)!.add(marketplace.toLowerCase());
-    // console.log(`Task ${taskId} blacklisted for marketplace: ${marketplace}`);
   } else {
     // Full task blacklist - add special marker
     taskBlacklist.get(taskId)!.add('*');
-    // console.log(`Task ${taskId} fully blacklisted`);
+  }
+
+  // Fix 5: Invalidate cache entries for this task to ensure immediate effect
+  // Delete all cache entries that start with this taskId
+  for (const cacheKey of blacklistCheckCache.keys()) {
+    if (cacheKey.startsWith(`${taskId}-`)) {
+      blacklistCheckCache.delete(cacheKey);
+    }
   }
 
   // Get current limiter queue size for reporting
   const counts = limiter.counts();
   const queuedJobs = counts.RECEIVED + counts.QUEUED;
 
-  // console.log(`Current limiter queue: ${queuedJobs} jobs`);
-
   return { cancelled: 0, blacklisted: true, queuedJobs };
 }
 
 export function removeTaskFromBlacklist(taskId: string, marketplace?: string) {
   const taskEntry = taskBlacklist.get(taskId);
-  if (!taskEntry) return false;
+  if (!taskEntry) {
+    return false;
+  }
 
   let wasRemoved = false;
 
   if (marketplace) {
     // Remove specific marketplace from blacklist
     wasRemoved = taskEntry.delete(marketplace.toLowerCase());
-    if (wasRemoved) {
-      // console.log(`Task ${taskId} removed from blacklist for marketplace: ${marketplace}`);
-    }
+
     // Clean up empty entries
     if (taskEntry.size === 0) {
       taskBlacklist.delete(taskId);
@@ -249,32 +602,54 @@ export function removeTaskFromBlacklist(taskId: string, marketplace?: string) {
     // Remove entire task from blacklist
     taskBlacklist.delete(taskId);
     wasRemoved = true;
-    // console.log(`Task ${taskId} fully removed from blacklist - all marketplaces can execute again`);
+  }
+
+  // Fix 5: Invalidate cache entries for this task to ensure immediate effect
+  for (const cacheKey of blacklistCheckCache.keys()) {
+    if (cacheKey.startsWith(`${taskId}-`)) {
+      blacklistCheckCache.delete(cacheKey);
+    }
   }
 
   return wasRemoved;
 }
 
 export function isTaskBlacklisted(taskId: string, marketplace?: string): boolean {
-  const taskEntry = taskBlacklist.get(taskId);
-  if (!taskEntry) return false;
+  // Fix 5: Check cache first to avoid redundant lookups
+  const cacheKey = `${taskId}-${marketplace || '*'}`;
+  const cached = blacklistCheckCache.get(cacheKey);
+  const now = Date.now();
 
-  // Check if fully blacklisted
-  if (taskEntry.has('*')) return true;
-
-  // Check marketplace-specific blacklist
-  if (marketplace) {
-    return taskEntry.has(marketplace.toLowerCase());
+  if (cached && (now - cached.timestamp) < BLACKLIST_CACHE_TTL) {
+    // Cache hit - return cached result without logging (reduces log noise)
+    return cached.result;
   }
 
-  // If no marketplace specified, check if any marketplace is blacklisted
-  return taskEntry.size > 0;
+  // Cache miss - perform actual check
+  const taskEntry = taskBlacklist.get(taskId);
+  let result: boolean;
+
+  if (!taskEntry) {
+    result = false;
+  } else if (taskEntry.has('*')) {
+    result = true;
+  } else if (marketplace) {
+    result = taskEntry.has(marketplace.toLowerCase());
+  } else {
+    result = taskEntry.size > 0;
+  }
+
+  // Cache the result
+  blacklistCheckCache.set(cacheKey, { result, timestamp: now });
+
+  // Only log cache misses (actual checks) to reduce log noise
+
+  return result;
 }
 
 // Enhanced limiter scheduling with task validation
 export function scheduleWithTaskValidation(fn: () => PromiseLike<any>, taskId: string) {
   if (isTaskBlacklisted(taskId)) {
-    // console.log(`Blocked job execution for stopped task: ${taskId}`);
     return Promise.reject(new Error(`Task ${taskId} is stopped`));
   }
   return limiter.schedule(fn);

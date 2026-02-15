@@ -12,8 +12,8 @@ export function convertDurationToSeconds(
     marketplaceName?: string;
   }
 ): number {
-  const { minimumSeconds = 0, marketplaceName = 'MARKETPLACE' } = options || {};
-  
+  const { minimumSeconds = 0, marketplaceName: _marketplaceName = 'MARKETPLACE' } = options || {};
+
   let seconds: number;
   
   switch (duration.unit.toLowerCase()) {
@@ -49,3 +49,51 @@ export const convertDurationForOpenSea = (duration: { value: number; unit: strin
 
 export const convertDurationForMagicEden = (duration: { value: number; unit: string }) =>
   convertDurationToSeconds(duration, { marketplaceName: 'MAGICEDEN' });
+
+/**
+ * Convert task bidDuration to milliseconds
+ * Handles all units: minutes, hours, days
+ *
+ * @param bidDuration - Duration object from task
+ * @returns Duration in milliseconds
+ * @throws Error if unit is invalid or value is negative
+ */
+export function convertBidDurationToMs(
+  bidDuration: { value: number; unit: string }
+): number {
+  if (bidDuration.value < 0) {
+    throw new Error(`Invalid bid duration value: ${bidDuration.value} (must be >= 0)`);
+  }
+
+  switch (bidDuration.unit.toLowerCase()) {
+    case 'minutes':
+    case 'm':
+      return bidDuration.value * 60 * 1000;
+    case 'hours':
+    case 'h':
+      return bidDuration.value * 60 * 60 * 1000;
+    case 'days':
+    case 'd':
+      return bidDuration.value * 24 * 60 * 60 * 1000;
+    default:
+      throw new Error(`Invalid bid duration unit: ${bidDuration.unit} (expected: minutes, hours, or days)`);
+  }
+}
+
+/**
+ * Convert task bidDuration to hours (for logsCache.setTaskTTL compatibility)
+ */
+export function convertBidDurationToHours(
+  bidDuration: { value: number; unit: string }
+): number {
+  return convertBidDurationToMs(bidDuration) / (60 * 60 * 1000);
+}
+
+/**
+ * Convert task bidDuration to seconds (for bid expiration calculations)
+ */
+export function convertBidDurationToSeconds(
+  bidDuration: { value: number; unit: string }
+): number {
+  return convertBidDurationToMs(bidDuration) / 1000;
+}

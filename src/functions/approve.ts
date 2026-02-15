@@ -1,6 +1,6 @@
 import { Contract, Wallet } from "ethers";
 import { errorLog, warnLog } from "../utils/debug-file-logger";
-import redisClient from "../utils/redis";
+import { LRUCache } from 'lru-cache';
 
 const approveAbi = [
   {
@@ -47,33 +47,30 @@ const approveAbi = [
   }
 ];
 
-// Cache TTL: 24 hours for NFT approvals (they rarely change)
-const NFT_APPROVAL_CACHE_TTL = 24 * 60 * 60; // 24 hours in seconds
+// LRU cache for NFT approvals (24 hour TTL, 10K max entries)
+const nftApprovalLRU = new LRUCache<string, boolean>({
+  max: 10000,
+  ttl: 24 * 60 * 60 * 1000, // 24 hours
+  allowStale: false,
+  updateAgeOnGet: false
+});
 
 export async function approveNFT(
   nftAddress: string,
   wallet: Wallet,
   marketContractAddress: string
 ): Promise<void> {
-  const redis = redisClient.getClient();
   const walletAddress = wallet.address.toLowerCase();
-  
-  // Create cache key: {nft_approval}:walletAddress:nftAddress:marketContractAddress
-  const cacheKey = `nft_approval:${walletAddress}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
-  
+
+  // Create cache key: walletAddress:nftAddress:marketContractAddress
+  const cacheKey = `${walletAddress}:${nftAddress.toLowerCase()}:${marketContractAddress.toLowerCase()}`;
+
   try {
-    // Check Redis cache first
-    if (redis && redisClient.isReady()) {
-      try {
-        const cachedApproval = await redis.get(cacheKey);
-        if (cachedApproval === 'true') {
-          // console.log(`NFT approval found in cache for ${nftAddress}`);
-          return;
-        }
-      } catch {
-        warnLog('Cache', 'Failed to check NFT approval cache');
-        // Continue without cache if Redis fails
-      }
+    // Check LRU cache first
+    const cachedApproval = nftApprovalLRU.get(cacheKey);
+    if (cachedApproval === true) {
+      // console.log(`NFT approval found in cache for ${nftAddress}`);
+      return;
     }
 
     // If not in cache, check blockchain
@@ -82,17 +79,11 @@ export async function approveNFT(
       wallet.address,
       marketContractAddress
     );
-    
+
     if (approved) {
       // Cache the approval status
-      if (redis && redisClient.isReady()) {
-        try {
-          await redis.set(cacheKey, 'true', 'EX', NFT_APPROVAL_CACHE_TTL);
-          // console.log(`Cached NFT approval for ${nftAddress}`);
-        } catch {
-          warnLog('Cache', 'Failed to cache NFT approval');
-        }
-      }
+      nftApprovalLRU.set(cacheKey, true);
+      // console.log(`Cached NFT approval for ${nftAddress}`);
     } else {
       // Need to approve
       const tx = await nftContract.setApprovalForAll(
@@ -101,16 +92,10 @@ export async function approveNFT(
       );
       await tx.wait();
       // console.log('NFT approved successfully');
-      
+
       // Cache the new approval
-      if (redis && redisClient.isReady()) {
-        try {
-          await redis.set(cacheKey, 'true', 'EX', NFT_APPROVAL_CACHE_TTL);
-          // console.log(`Cached new NFT approval for ${nftAddress}`);
-        } catch {
-          warnLog('Cache', 'Failed to cache new NFT approval');
-        }
-      }
+      nftApprovalLRU.set(cacheKey, true);
+      // console.log(`Cached new NFT approval for ${nftAddress}`);
     }
   } catch (err: any) {
     // If approval fails, don't cache anything
@@ -118,3 +103,10 @@ export async function approveNFT(
     // console.log(err?.reason ?? err?.message);
   }
 };
+
+/**
+ * Export cache for monitoring (used by memory-snapshot.service.ts)
+ */
+export function getNftApprovalCache(): LRUCache<string, boolean> {
+  return nftApprovalLRU;
+}

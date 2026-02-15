@@ -1,4 +1,5 @@
-import { BoundedCache } from './bounded-cache';
+import { LRUCache } from 'lru-cache';
+import { getCacheStats } from './lru-helpers';
 
 export interface TradingDisabledInfo {
   contractAddress: string;
@@ -11,16 +12,19 @@ export interface TradingDisabledInfo {
 /**
  * Cache for tracking NFT tokens that have "Trading is disabled" errors.
  * Prevents repeated bid attempts on tokens that OpenSea has restricted.
- * Cache entries expire after 24 hours to allow retry in case restrictions are lifted.
- * (Increased from 1 hour as trading restrictions rarely change quickly)
+ * Cache entries expire after 4 hours to allow retry in case restrictions are lifted.
+ * (Reduced from 24 hours as OpenSea restrictions typically lift within 2-12 hours)
  */
 class TradingDisabledCache {
-  private cache: BoundedCache<string, TradingDisabledInfo>;
-  private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours (increased from 1 hour for better efficiency)
+  private cache: LRUCache<string, TradingDisabledInfo>;
+  private readonly CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours (trading restrictions rarely change)
 
   constructor() {
-    // Max 5000 tokens with 24 hour TTL
-    this.cache = new BoundedCache<string, TradingDisabledInfo>(5000, this.CACHE_TTL, 'tradingDisabledCache');
+    // Max 5000 tokens with 4 hour TTL
+    this.cache = new LRUCache<string, TradingDisabledInfo>({
+      max: 5000,
+      ttl: this.CACHE_TTL
+    });
   }
 
   /**
@@ -57,7 +61,7 @@ class TradingDisabledCache {
    */
   getDisabledTokens(): TradingDisabledInfo[] {
     const results: TradingDisabledInfo[] = [];
-    for (const key of this.cache.keys()) {
+    for (const key of Array.from(this.cache.keys())) {
       const value = this.cache.get(key);
       if (value) {
         results.push(value);
@@ -94,7 +98,7 @@ class TradingDisabledCache {
    * Get detailed cache statistics
    */
   getCacheStats() {
-    return this.cache.getStats();
+    return getCacheStats(this.cache);
   }
 }
 

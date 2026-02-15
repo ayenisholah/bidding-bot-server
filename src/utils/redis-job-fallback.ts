@@ -1,60 +1,51 @@
 import { Job, Queue } from 'bullmq';
 import { withRedisRetry } from './redis';
 import { errorLog } from './debug-file-logger';
+import { LRUCache } from 'lru-cache';
 
 interface JobFallbackData {
   jobId: string;
   taskId: string;
   marketplace: string;
-  timestamp: number;
   data: any;
 }
 
-// In-memory fallback storage for critical job data
+// LRU cache for job fallback storage
+const jobFallbackLRU = new LRUCache<string, JobFallbackData>({
+  max: 10000,
+  ttl: 30 * 60 * 1000, // 30 minutes
+  allowStale: false,
+  updateAgeOnGet: false
+});
+
+// Wrapper class for compatibility with existing API
 class JobFallbackStore {
-  private store: Map<string, JobFallbackData> = new Map();
-  private readonly maxSize = 10000; // Limit memory usage
-  private readonly ttl = 30 * 60 * 1000; // 30 minutes TTL
 
   public save(jobId: string, taskId: string, marketplace: string, data: any): void {
-    // Clean old entries if at capacity
-    if (this.store.size >= this.maxSize) {
-      this.cleanOldEntries();
-    }
-
-    this.store.set(jobId, {
+    // LRU handles capacity and eviction automatically
+    jobFallbackLRU.set(jobId, {
       jobId,
       taskId,
       marketplace,
-      timestamp: Date.now(),
       data
     });
   }
 
   public get(jobId: string): JobFallbackData | null {
-    const entry = this.store.get(jobId);
-    if (!entry) return null;
-
-    // Check if entry is expired
-    if (Date.now() - entry.timestamp > this.ttl) {
-      this.store.delete(jobId);
-      return null;
-    }
-
-    return entry;
+    // LRU handles expiration automatically
+    return jobFallbackLRU.get(jobId) || null;
   }
 
   public delete(jobId: string): void {
-    this.store.delete(jobId);
+    jobFallbackLRU.delete(jobId);
   }
 
   public getByTaskId(taskId: string): JobFallbackData[] {
     const results: JobFallbackData[] = [];
-    const now = Date.now();
 
-    for (const [jobId, entry] of this.store.entries()) {
-      if (entry.taskId === taskId && (now - entry.timestamp <= this.ttl)) {
-        // console.log(`[JobFallbackStore] Found job ${jobId} for task ${taskId} in store`);
+    // LRU only contains non-expired entries
+    for (const [, entry] of jobFallbackLRU.entries()) {
+      if (entry.taskId === taskId) {
         results.push(entry);
       }
     }
@@ -62,33 +53,8 @@ class JobFallbackStore {
     return results;
   }
 
-  private cleanOldEntries(): void {
-    const now = Date.now();
-    const entriesToDelete: string[] = [];
-
-    for (const [jobId, entry] of this.store.entries()) {
-      if (now - entry.timestamp > this.ttl) {
-        entriesToDelete.push(jobId);
-      }
-    }
-
-    // Delete oldest 10% if still at capacity
-    if (entriesToDelete.length < this.maxSize * 0.1) {
-      const sortedEntries = Array.from(this.store.entries())
-        .sort((a, b) => a[1].timestamp - b[1].timestamp);
-      
-      const deleteCount = Math.floor(this.maxSize * 0.1);
-      for (let i = 0; i < deleteCount && i < sortedEntries.length; i++) {
-        entriesToDelete.push(sortedEntries[i][0]);
-      }
-    }
-
-    const deletedCount = entriesToDelete.length;
-    entriesToDelete.forEach(jobId => this.store.delete(jobId));
-  }
-
   public size(): number {
-    return this.store.size;
+    return jobFallbackLRU.size;
   }
 }
 
@@ -129,7 +95,7 @@ export async function safeGetJob(
         data: fallback.data,
         name: 'bid',
         opts: {},
-        timestamp: fallback.timestamp,
+        timestamp: Date.now(),
         attemptsMade: 0,
         processedOn: undefined,
         finishedOn: undefined,
@@ -150,7 +116,7 @@ export async function safeGetJob(
         data: fallback.data,
         name: 'bid',
         opts: {},
-        timestamp: fallback.timestamp,
+        timestamp: Date.now(),
         attemptsMade: 0,
         processedOn: undefined,
         finishedOn: undefined,
@@ -175,7 +141,7 @@ export async function safeMarkJobAsProcessed(
   try {
     // Always update the counter - both successful and failed jobs count towards completion
     await updateCallback(taskId, marketplace, 1);
-    
+
     // Clean up fallback store
     jobFallbackStore.delete(jobId);
 
@@ -199,7 +165,7 @@ export async function getQueueHealth(queue: Queue): Promise<{
       'getJobCounts',
       1
     );
-    
+
     return {
       healthy: counts !== null,
       fallbackSize: jobFallbackStore.size(),
@@ -214,58 +180,14 @@ export async function getQueueHealth(queue: Queue): Promise<{
   }
 }
 
-/**
- * Recover stuck jobs from fallback store
- */
-export async function recoverStuckJobs(
-  taskId: string,
-  expectedCounts: { [marketplace: string]: number },
-  actualCounts: { [marketplace: string]: number },
-  updateCallback: (taskId: string, marketplace: string, increment: number) => Promise<void>
-): Promise<void> {
-  // console.log(`[JobFallback] Checking for stuck jobs for task ${taskId}`);
-  
-  const fallbackJobs = jobFallbackStore.getByTaskId(taskId);
-  // console.log(`[JobFallback] Found ${fallbackJobs.length} jobs in fallback store`);
+// NOTE: recoverStuckJobs() removed - recovery logic was causing issues
+// See docs/RECOVERY-FUNCTIONS.md for historical documentation
 
-  for (const marketplace of Object.keys(expectedCounts)) {
-    const expected = expectedCounts[marketplace];
-    const actual = actualCounts[marketplace] || 0;
-    const missing = expected - actual;
-
-    if (missing > 0) {
-      // console.log(`[JobFallback] Task ${taskId} missing ${missing} ${marketplace} jobs`);
-      
-      // Count jobs in fallback for this marketplace
-      const fallbackCount = fallbackJobs.filter(j => j.marketplace === marketplace).length;
-      
-      if (fallbackCount > 0) {
-        // console.log(`[JobFallback] Recovering ${Math.min(fallbackCount, missing)} ${marketplace} jobs from fallback`);
-        
-        // Update counter for recovered jobs
-        await updateCallback(taskId, marketplace, Math.min(fallbackCount, missing));
-        
-        // Clean up processed jobs
-        fallbackJobs
-          .filter(j => j.marketplace === marketplace)
-          .slice(0, missing)
-          .forEach(j => jobFallbackStore.delete(j.jobId));
-      }
-    }
-  }
-}
-
-// Periodic cleanup
+// LRU automatically cleans up expired entries - no manual cleanup needed
+// Optional: Keep interval for monitoring only
 setInterval(() => {
-  const sizeBefore = jobFallbackStore.size();
-  if (sizeBefore > 0) {
-    // Trigger cleanup by trying to add a dummy entry
-    jobFallbackStore.save('__cleanup__', '', '', {});
-    jobFallbackStore.delete('__cleanup__');
-    
-    const sizeAfter = jobFallbackStore.size();
-    if (sizeAfter < sizeBefore) {
-      // console.log(`[JobFallback] Cleaned up ${sizeBefore - sizeAfter} expired entries`);
-    }
+  const currentSize = jobFallbackStore.size();
+  if (currentSize > 0) {
+    // console.log(`[JobFallback] Current cache size: ${currentSize}/${jobFallbackLRU.max}`);
   }
 }, 5 * 60 * 1000); // Every 5 minutes

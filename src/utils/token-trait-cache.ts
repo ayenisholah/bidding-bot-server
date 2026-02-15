@@ -1,12 +1,11 @@
-import { errorLog, warnLog, debugLog } from './debug-file-logger';
-import TokenTraitCacheModel from '../models/tokenTraitCache.model';
+import { errorLog } from './debug-file-logger';
+import { LRUCache } from 'lru-cache';
 
-// Cache configuration
-const MEMORY_CACHE_SIZE = 1000; // Maximum tokens in memory
-const MEMORY_TTL = 60 * 60 * 1000; // 1 hour in milliseconds
-const MONGODB_CACHE_MAX_SIZE = 100000; // Maximum documents in MongoDB collection
+// LRU Cache configuration (single-tier, no MongoDB)
+const L1_CACHE_SIZE = 1000000; // Max 1M token trait entries (increased for production scale)
+const L1_CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours TTL
 
-interface TokenTrait {
+interface TokenTraitType {
   trait_type: string;
   value: any;
   display_type?: string;
@@ -16,23 +15,47 @@ interface TokenTrait {
 interface TokenTraitData {
   tokenId: string;
   contractAddress: string;
-  traits: TokenTrait[];
+  traits: TokenTraitType[];
   lastUpdated: Date;
   floorPrice?: number; // Trait-specific floor price if applicable
 }
 
-interface MemoryCacheEntry {
-  data: TokenTraitData;
-  expires: number;
+// Cache hit/miss tracking
+interface TokenTraitCacheStats {
+  hits: number;
+  misses: number;
+  sets: number;
+  totalRequests: number;
+  hitRate: string;
+  size: number;
+  maxSize: number;
 }
 
+const cacheStats: Omit<TokenTraitCacheStats, 'hitRate' | 'size' | 'maxSize'> = {
+  hits: 0,
+  misses: 0,
+  sets: 0,
+  totalRequests: 0
+};
+
+// Log stats every 5 minutes
+setInterval(() => {
+  if (cacheStats.totalRequests > 0) {
+    const stats = getTokenTraitCacheStats();
+  }
+}, 300000); // 5 minutes
+
 class TokenTraitCache {
-  private memoryCache: Map<string, MemoryCacheEntry> = new Map();
-  // Memory optimization: Map-based LRU tracking instead of array (O(1) vs O(n) for updates)
-  private accessOrder: Map<string, number> = new Map(); // key -> access timestamp
+  // LRU cache (single-tier, no MongoDB)
+  public tokenTraitsLRU: LRUCache<string, TokenTraitData>;
 
   constructor() {
-    // No need for initialization - we'll use the shared Redis client on demand
+    this.tokenTraitsLRU = new LRUCache<string, TokenTraitData>({
+      max: L1_CACHE_SIZE,
+      ttl: L1_CACHE_TTL,
+      updateAgeOnGet: true, // LRU behavior - keep hot tokens fresh
+      allowStale: false
+    });
   }
 
   /**
@@ -43,76 +66,21 @@ class TokenTraitCache {
   }
 
   /**
-   * Update LRU access order - O(1) operation with Map
-   */
-  private updateAccessOrder(key: string): void {
-    this.accessOrder.set(key, Date.now());
-  }
-
-  /**
-   * Evict least recently used entries if cache is full
-   * Memory optimization: find oldest by timestamp instead of maintaining sorted array
-   */
-  private evictLRU(): void {
-    while (this.memoryCache.size >= MEMORY_CACHE_SIZE && this.accessOrder.size > 0) {
-      // Find the oldest entry by timestamp
-      let oldestTimestamp = Infinity;
-      let oldestKey: string | null = null;
-
-      for (const [key, timestamp] of this.accessOrder) {
-        if (timestamp < oldestTimestamp) {
-          oldestTimestamp = timestamp;
-          oldestKey = key;
-        }
-      }
-
-      if (oldestKey) {
-        this.memoryCache.delete(oldestKey);
-        this.accessOrder.delete(oldestKey);
-      } else {
-        break;
-      }
-    }
-  }
-
-  /**
-   * Set token traits in cache
+   * Set token traits in cache (LRU only - no MongoDB)
    */
   async setTokenTraits(data: TokenTraitData): Promise<void> {
     const key = this.getCacheKey(data.contractAddress, data.tokenId);
+    const normalizedData = {
+      ...data,
+      contractAddress: data.contractAddress.toLowerCase(),
+      lastUpdated: data.lastUpdated || new Date()
+    };
 
     try {
-      // Store in memory cache with expiration
-      this.evictLRU();
-      this.memoryCache.set(key, {
-        data,
-        expires: Date.now() + MEMORY_TTL
-      });
-      this.updateAccessOrder(key);
+      // Update L1 cache only (MongoDB removed!)
+      this.tokenTraitsLRU.set(key, normalizedData);
+      cacheStats.sets++;
 
-      // Store in MongoDB (bounded cache with LRU eviction)
-      try {
-        await TokenTraitCacheModel.findOneAndUpdate(
-          {
-            contractAddress: data.contractAddress.toLowerCase(),
-            tokenId: data.tokenId
-          },
-          {
-            $set: {
-              traits: data.traits,
-              lastUpdated: data.lastUpdated || new Date(),
-              accessedAt: new Date()
-            }
-          },
-          { upsert: true, new: true }
-        );
-
-        // Check if we need to evict old entries (bounded cache)
-        await this.evictMongoDBIfNeeded();
-      } catch (mongoErr) {
-        // MongoDB not available or error, continue with memory cache only
-        warnLog('Cache', `MongoDB write failed for token trait cache | error=${(mongoErr as Error).message}`);
-      }
 
     } catch (error) {
       errorLog('Cache', `Failed to cache token traits | contract=${data.contractAddress} | tokenId=${data.tokenId}`, error);
@@ -120,94 +88,28 @@ class TokenTraitCache {
   }
 
   /**
-   * Evict oldest entries from MongoDB if cache exceeds max size
-   */
-  private async evictMongoDBIfNeeded(): Promise<void> {
-    try {
-      const count = await TokenTraitCacheModel.countDocuments();
-      if (count > MONGODB_CACHE_MAX_SIZE) {
-        // Delete oldest 10% of entries based on accessedAt
-        const deleteCount = Math.floor(MONGODB_CACHE_MAX_SIZE * 0.1);
-        const oldestDocs = await TokenTraitCacheModel
-          .find({})
-          .sort({ accessedAt: 1 })
-          .limit(deleteCount)
-          .select('_id');
-
-        const idsToDelete = oldestDocs.map(doc => doc._id);
-        await TokenTraitCacheModel.deleteMany({ _id: { $in: idsToDelete } });
-
-        debugLog('Cache', `MongoDB trait cache eviction: removed ${deleteCount} oldest entries | total was ${count}`);
-      }
-    } catch (error) {
-      // Non-critical, just log
-      warnLog('Cache', `MongoDB eviction check failed | error=${(error as Error).message}`);
-    }
-  }
-
-  /**
-   * Get token traits from cache
+   * Get token traits from cache (LRU only - no MongoDB)
    */
   async getTokenTraits(contractAddress: string, tokenId: string): Promise<TokenTraitData | null> {
     const key = this.getCacheKey(contractAddress, tokenId);
+    cacheStats.totalRequests++;
 
     try {
-      // Check memory cache first
-      const memoryCacheEntry = this.memoryCache.get(key);
-      if (memoryCacheEntry && memoryCacheEntry.expires > Date.now()) {
-        this.updateAccessOrder(key);
-        return memoryCacheEntry.data;
+      // Try L1 cache (only cache tier!)
+      const cached = this.tokenTraitsLRU.get(key);
+      if (cached) {
+        cacheStats.hits++;
+        // CACHE_HIT log removed - was generating 11.3M lines/day (1.2GB)
+        return cached;
       }
 
-      // Remove expired entry from memory
-      if (memoryCacheEntry) {
-        this.memoryCache.delete(key);
-        this.accessOrder.delete(key);
-      }
-
-      // Check MongoDB
-      try {
-        const mongoDoc = await TokenTraitCacheModel.findOneAndUpdate(
-          {
-            contractAddress: contractAddress.toLowerCase(),
-            tokenId: tokenId
-          },
-          { $set: { accessedAt: new Date() } }, // Update access time for LRU
-          { new: true }
-        );
-
-        if (mongoDoc) {
-          const data: TokenTraitData = {
-            contractAddress: mongoDoc.contractAddress,
-            tokenId: mongoDoc.tokenId,
-            traits: mongoDoc.traits.map((t: { trait_type: string; value: any; display_type?: string; rarity?: number }) => ({
-              trait_type: t.trait_type,
-              value: t.value,
-              display_type: t.display_type,
-              rarity: t.rarity
-            })),
-            lastUpdated: mongoDoc.lastUpdated
-          };
-
-          // Store back in memory cache
-          this.evictLRU();
-          this.memoryCache.set(key, {
-            data,
-            expires: Date.now() + MEMORY_TTL
-          });
-          this.updateAccessOrder(key);
-
-          return data;
-        }
-      } catch (mongoErr) {
-        // MongoDB not available, continue without it
-        warnLog('Cache', `MongoDB read failed for token trait cache | error=${(mongoErr as Error).message}`);
-      }
-
+      // Cache miss - return null, let caller fetch from API
+      cacheStats.misses++;
       return null;
 
     } catch (error) {
       errorLog('Cache', `Failed to get token traits from cache | contract=${contractAddress} | tokenId=${tokenId}`, error);
+      cacheStats.misses++;
       return null;
     }
   }
@@ -216,165 +118,61 @@ class TokenTraitCache {
    * Check if a token has a specific trait
    */
   async tokenHasTrait(
-    contractAddress: string, 
-    tokenId: string, 
-    traitType: string, 
+    contractAddress: string,
+    tokenId: string,
+    traitType: string,
     traitValue: any
   ): Promise<boolean> {
     const traits = await this.getTokenTraits(contractAddress, tokenId);
-    
+
     if (!traits) {
       return false;
     }
 
-    return traits.traits.some(trait => 
-      trait.trait_type === traitType && 
+    return traits.traits.some(trait =>
+      trait.trait_type === traitType &&
       trait.value === traitValue
     );
   }
 
-  /**
-   * Get all tokens with a specific trait (from memory cache only)
-   */
-  getTokensWithTrait(contractAddress: string, traitType: string, traitValue: any): string[] {
-    const matchingTokenIds: string[] = [];
-    const contractLower = contractAddress.toLowerCase();
-
-    for (const [key, entry] of this.memoryCache.entries()) {
-      if (entry.expires > Date.now() && key.startsWith(`traits:${contractLower}:`)) {
-        const hasTrait = entry.data.traits.some(trait =>
-          trait.trait_type === traitType &&
-          trait.value === traitValue
-        );
-        
-        if (hasTrait) {
-          matchingTokenIds.push(entry.data.tokenId);
-        }
-      }
-    }
-
-    return matchingTokenIds;
-  }
-
-  /**
-   * Clear specific token from cache
-   */
-  async clearToken(contractAddress: string, tokenId: string): Promise<void> {
-    const key = this.getCacheKey(contractAddress, tokenId);
-
-    try {
-      // Remove from memory cache
-      this.memoryCache.delete(key);
-      this.accessOrder.delete(key);
-
-      // Remove from MongoDB
-      try {
-        await TokenTraitCacheModel.deleteOne({
-          contractAddress: contractAddress.toLowerCase(),
-          tokenId: tokenId
-        });
-      } catch (mongoErr) {
-        warnLog('Cache', `MongoDB delete failed for token trait cache | error=${(mongoErr as Error).message}`);
-      }
-
-    } catch (error) {
-      errorLog('Cache', `Failed to clear token from cache | contract=${contractAddress} | tokenId=${tokenId}`, error);
-    }
-  }
-
-  /**
-   * Clear all tokens for a contract
-   */
-  async clearContract(contractAddress: string): Promise<void> {
-    const contractLower = contractAddress.toLowerCase();
-    const keysToRemove: string[] = [];
-
-    try {
-      // Find all keys for this contract in memory
-      for (const key of this.memoryCache.keys()) {
-        if (key.startsWith(`traits:${contractLower}:`)) {
-          keysToRemove.push(key);
-        }
-      }
-
-      // Remove from memory cache
-      for (const key of keysToRemove) {
-        this.memoryCache.delete(key);
-        this.accessOrder.delete(key);
-      }
-
-      // Remove from MongoDB
-      try {
-        const result = await TokenTraitCacheModel.deleteMany({
-          contractAddress: contractLower
-        });
-        debugLog('Cache', `MongoDB cleared ${result.deletedCount} trait cache entries for contract ${contractAddress.slice(0, 10)}...`);
-      } catch (mongoErr) {
-        warnLog('Cache', `MongoDB bulk delete failed for token trait cache | error=${(mongoErr as Error).message}`);
-      }
-
-    } catch (error) {
-      errorLog('Cache', `Failed to clear contract from cache | contract=${contractAddress} | keysRemoved=${keysToRemove.length}`, error);
-    }
-  }
 
   /**
    * Get cache statistics
    */
-  async getCacheStats(): Promise<{
-    memorySize: number;
-    memoryHits: number;
-    mongoDBSize: number;
-    oldestAccess: string | null;
-    newestAccess: string | null;
-  }> {
-    let mongoDBSize = 0;
-    try {
-      mongoDBSize = await TokenTraitCacheModel.countDocuments();
-    } catch {
-      // MongoDB not available
-    }
-
-    // Find oldest and newest access timestamps
-    let oldestKey: string | null = null;
-    let newestKey: string | null = null;
-    let oldestTime = Infinity;
-    let newestTime = 0;
-
-    for (const [key, timestamp] of this.accessOrder) {
-      if (timestamp < oldestTime) {
-        oldestTime = timestamp;
-        oldestKey = key;
-      }
-      if (timestamp > newestTime) {
-        newestTime = timestamp;
-        newestKey = key;
-      }
-    }
+  async getCacheStats(): Promise<TokenTraitCacheStats> {
+    const hitRate = cacheStats.totalRequests > 0
+      ? ((cacheStats.hits / cacheStats.totalRequests) * 100).toFixed(2) + '%'
+      : '0%';
 
     return {
-      memorySize: this.memoryCache.size,
-      memoryHits: this.accessOrder.size,
-      mongoDBSize,
-      oldestAccess: oldestKey,
-      newestAccess: newestKey
+      size: this.tokenTraitsLRU.size,
+      maxSize: L1_CACHE_SIZE,
+      hits: cacheStats.hits,
+      misses: cacheStats.misses,
+      sets: cacheStats.sets,
+      totalRequests: cacheStats.totalRequests,
+      hitRate
     };
   }
 
   /**
-   * Shutdown cache connections
+   * Shutdown cache (clear LRU)
    */
   async shutdown(): Promise<void> {
     try {
-      // Just clear memory cache - MongoDB connection is shared
-      this.memoryCache.clear();
-      this.accessOrder.clear();
-
-      console.log('[TOKEN TRAIT CACHE] Memory cache cleared');
-
+      this.tokenTraitsLRU.clear();
+      console.log('[TOKEN TRAIT CACHE] Cache cleared');
     } catch (error) {
       errorLog('Cache', 'Error shutting down token trait cache', error);
     }
+  }
+
+  /**
+   * Get the internal LRU cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  public getCache(): LRUCache<string, TokenTraitData> {
+    return this.tokenTraitsLRU;
   }
 }
 
@@ -382,4 +180,21 @@ class TokenTraitCache {
 export const tokenTraitCache = new TokenTraitCache();
 
 // Export types
-export { TokenTrait, TokenTraitData };
+export { TokenTraitType as TokenTrait, TokenTraitData };
+
+// Export stats function for health endpoint
+export function getTokenTraitCacheStats(): TokenTraitCacheStats {
+  const hitRate = cacheStats.totalRequests > 0
+    ? ((cacheStats.hits / cacheStats.totalRequests) * 100).toFixed(2) + '%'
+    : '0%';
+
+  return {
+    size: tokenTraitCache.tokenTraitsLRU?.size || 0,
+    maxSize: L1_CACHE_SIZE,
+    hits: cacheStats.hits,
+    misses: cacheStats.misses,
+    sets: cacheStats.sets,
+    totalRequests: cacheStats.totalRequests,
+    hitRate
+  };
+}

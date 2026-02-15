@@ -1,12 +1,17 @@
 /**
  * Cancellation Tracker
- * 
+ *
  * Tracks bid cancellation progress for tasks.
  * - Fetches total bid count from MongoDB
  * - Tracks individual cancellation completions
  * - Calculates percentage as completed/totalBids
  * - Thread-safe for concurrent operations
  */
+
+import { warnLog } from './debug-file-logger';
+
+// Note: Using 'StopTracker' prefix to route logs to stoptask-YYYY-MM-DD.log
+// for easier correlation with stopTask debug logging
 
 interface CancellationTracking {
   taskId: string;
@@ -25,6 +30,7 @@ class CancellationTracker {
    */
   initializeTracking(taskId: string, totalBids: number, marketplace?: string): void {
     const key = this.getKey(taskId, marketplace);
+
     this.trackingMap.set(key, {
       taskId,
       marketplace,
@@ -32,17 +38,19 @@ class CancellationTracker {
       completedCancellations: 0,
       startTime: Date.now()
     });
+
   }
 
   /**
    * Set marketplace-specific totals for global cancellations
    */
   setMarketplaceTotals(taskId: string, marketplaceTotals: { opensea: number; magiceden: number; blur: number }): void {
+
     Object.entries(marketplaceTotals).forEach(([marketplace, total]) => {
       const cacheKey = `${taskId}-${marketplace}-total`;
       this.marketplaceTotalsCache.set(cacheKey, total);
-      // console.log(`[CancellationTracker] Set marketplace total - ${marketplace}: ${total}`);
     });
+
   }
 
   /**
@@ -50,6 +58,7 @@ class CancellationTracker {
    * @param completionCount Number of cancellations completed (default: 1)
    */
   recordCompletion(taskId: string, completionCount: number = 1, marketplace?: string): void {
+
     // For global cancellations, we need to initialize marketplace-specific tracking
     if (this.hasTaskLevelTracking(taskId) && marketplace) {
       // Initialize marketplace tracking if it doesn't exist
@@ -58,7 +67,8 @@ class CancellationTracker {
         // Get marketplace-specific totals from parent cache if available
         const parentCacheKey = `${taskId}-${marketplace}-total`;
         const marketplaceTotalBids = this.marketplaceTotalsCache.get(parentCacheKey) || 0;
-        
+
+
         this.trackingMap.set(marketplaceKey, {
           taskId,
           marketplace,
@@ -66,17 +76,35 @@ class CancellationTracker {
           completedCancellations: 0,
           startTime: Date.now()
         });
-        
-        // console.log(`[CancellationTracker] Initialized marketplace tracking - Key: ${marketplaceKey}, TotalBids: ${marketplaceTotalBids}`);
+
       }
     }
-    
+
+    // Update marketplace-level tracking (if marketplace specified)
     const key = this.getKey(taskId, marketplace);
     const tracking = this.trackingMap.get(key);
-    
+
     if (tracking) {
+      const before = tracking.completedCancellations;
       // Cap completions at total bids to prevent overflow
       tracking.completedCancellations = Math.min(tracking.completedCancellations + completionCount, tracking.totalBids);
+      const after = tracking.completedCancellations;
+
+    } else {
+      // Late completion arrival - tracking was already cleared (task restarted or cancellation completed)
+      // This is expected behavior - silently ignore
+    }
+
+    // Fix 4: ALSO update task-level tracking when marketplace-specific completion is recorded
+    // This ensures the dashboard shows non-zero completion at task level
+    if (marketplace) {
+      const taskKey = this.getKey(taskId); // No marketplace = task-level key
+      const taskTracking = this.trackingMap.get(taskKey);
+      if (taskTracking) {
+        const taskBefore = taskTracking.completedCancellations;
+        taskTracking.completedCancellations = Math.min(taskTracking.completedCancellations + completionCount, taskTracking.totalBids);
+        const taskAfter = taskTracking.completedCancellations;
+      }
     }
   }
 
@@ -87,7 +115,7 @@ class CancellationTracker {
   getPercentage(taskId: string, marketplace?: string): number | null {
     const key = this.getKey(taskId, marketplace);
     const tracking = this.trackingMap.get(key);
-    
+
     if (!tracking) {
       return null;
     }
@@ -99,7 +127,7 @@ class CancellationTracker {
     // Calculate percentage with 2 decimal places
     const percentage = (tracking.completedCancellations / tracking.totalBids) * 100;
     const result = Math.min(100, parseFloat(percentage.toFixed(2)));
-    
+
     return result;
   }
 
@@ -117,7 +145,7 @@ class CancellationTracker {
   isComplete(taskId: string, marketplace?: string): boolean {
     const key = this.getKey(taskId, marketplace);
     const tracking = this.trackingMap.get(key);
-    
+
     if (!tracking) {
       return false;
     }
@@ -133,30 +161,37 @@ class CancellationTracker {
     // Check if we have task-level tracking (no marketplace)
     const taskLevelKey = this.getKey(taskId);
     const taskLevelTracking = this.trackingMap.get(taskLevelKey);
-    
+
     if (taskLevelTracking) {
       // We have task-level tracking, calculate from marketplace completions
       let totalCompleted = 0;
       const marketplaces = ['opensea', 'magiceden', 'blur'];
-      
+      const mpBreakdown: Record<string, number> = {};
+
       // Sum up completions from each marketplace
       marketplaces.forEach(marketplace => {
         const marketplaceKey = this.getKey(taskId, marketplace);
         const marketplaceTracking = this.trackingMap.get(marketplaceKey);
         if (marketplaceTracking) {
           totalCompleted += marketplaceTracking.completedCancellations;
+          mpBreakdown[marketplace] = marketplaceTracking.completedCancellations;
+        } else {
+          mpBreakdown[marketplace] = 0;
         }
       });
-      
+
       // Calculate percentage based on task-level total
       if (taskLevelTracking.totalBids === 0) {
         return 100;
       }
-      
+
       const percentage = (totalCompleted / taskLevelTracking.totalBids) * 100;
-      return Math.min(100, parseFloat(percentage.toFixed(2)));
+      const result = Math.min(100, parseFloat(percentage.toFixed(2)));
+
+
+      return result;
     }
-    
+
     // No task-level tracking, return null
     return null;
   }
@@ -174,15 +209,34 @@ class CancellationTracker {
    */
   clearTracking(taskId: string, marketplace?: string): void {
     const key = this.getKey(taskId, marketplace);
+    const hadEntry = this.trackingMap.has(key);
+
+
     this.trackingMap.delete(key);
-    
-    // Clear marketplace totals cache if clearing task-level tracking
+
+    // Clear marketplace totals cache AND marketplace-specific tracking entries if clearing task-level tracking
     if (!marketplace) {
       const marketplaces = ['opensea', 'magiceden', 'blur'];
+      const deletedCacheKeys: string[] = [];
+      const deletedTrackingKeys: string[] = [];
+
       marketplaces.forEach(mp => {
+        // Clear cache entries
         const cacheKey = `${taskId}-${mp}-total`;
+        if (this.marketplaceTotalsCache.has(cacheKey)) {
+          deletedCacheKeys.push(cacheKey);
+        }
         this.marketplaceTotalsCache.delete(cacheKey);
+
+        // Fix 13: Also clear marketplace-specific tracking entries to prevent stale entries
+        // from previous cancellation attempts causing premature 100% completion detection
+        const trackingKey = this.getKey(taskId, mp);
+        if (this.trackingMap.has(trackingKey)) {
+          deletedTrackingKeys.push(trackingKey);
+        }
+        this.trackingMap.delete(trackingKey);
       });
+
     }
   }
 

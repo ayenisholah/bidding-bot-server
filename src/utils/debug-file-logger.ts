@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 
-const DEBUG = process.env.DEBUG === 'true';
 export const LOG_DIR = path.resolve(process.cwd(), 'debug-logs');
 
 // Ensure directory exists on module load and verify write permissions
@@ -29,15 +28,113 @@ try {
  * Groups log lines by file path to minimize I/O operations
  */
 const logBuffer = new Map<string, string[]>();
+// Expose for memory monitoring
+(global as any).__logBuffer__ = logBuffer;
+
 const FLUSH_INTERVAL_MS = 1000; // Flush every 1 second
 let flushIntervalId: NodeJS.Timeout | null = null;
 let isShuttingDown = false;
+
+// Log rotation and cleanup state
+let currentLogDate: string = new Date().toISOString().split('T')[0];
+let cleanupIntervalId: NodeJS.Timeout | null = null;
+
+// Configuration
+const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const LOG_RETENTION_HOURS = (() => {
+  const value = parseInt(process.env.LOG_RETENTION_HOURS || '24', 10);
+  return isNaN(value) || value < 0 ? 24 : value;
+})();
+const LOG_RETENTION_MS = LOG_RETENTION_HOURS * 60 * 60 * 1000;
+
+/**
+ * Check if date has changed and log rotation is needed.
+ */
+function shouldRotateLogFiles(): boolean {
+  const newDate = new Date().toISOString().split('T')[0];
+  return newDate !== currentLogDate;
+}
+
+/**
+ * Rotate to new date-stamped log files.
+ * Flushes current buffers before updating date.
+ */
+function rotateLogFiles(): void {
+  const oldDate = currentLogDate;
+  const newDate = new Date().toISOString().split('T')[0];
+
+  // Flush pending logs to old date files first
+  if (logBuffer.size > 0) {
+    for (const [filePath, lines] of logBuffer) {
+      if (lines.length > 0) {
+        try {
+          fs.appendFileSync(filePath, lines.join('\n') + '\n');
+        } catch {
+          // Silently fail rotation flush
+        }
+      }
+    }
+    logBuffer.clear();
+  }
+
+  // Update to new date
+  currentLogDate = newDate;
+  console.log(`[LogWriter] LOG_ROTATION | ${oldDate} → ${newDate}`);
+}
+
+/**
+ * Scan and delete log files older than retention period.
+ * Runs asynchronously without blocking logging.
+ */
+async function cleanupOldLogFiles(): Promise<void> {
+  if (!CAN_WRITE_LOGS) return;
+  if (LOG_RETENTION_HOURS === 0) return; // Cleanup disabled
+
+  try {
+    const files = await fs.promises.readdir(LOG_DIR);
+    const now = Date.now();
+    const cutoffTime = now - LOG_RETENTION_MS;
+    let deletedCount = 0;
+    let failedCount = 0;
+
+    for (const file of files) {
+      if (!file.endsWith('.log')) continue;
+
+      const filePath = path.join(LOG_DIR, file);
+
+      try {
+        const stats = await fs.promises.stat(filePath);
+
+        if (stats.mtimeMs < cutoffTime) {
+          await fs.promises.unlink(filePath);
+          deletedCount++;
+          const ageHours = Math.round((now - stats.mtimeMs) / (60 * 60 * 1000));
+          console.log(`[LogWriter] CLEANUP | Deleted: ${file} (age: ${ageHours}h)`);
+        }
+      } catch (err) {
+        failedCount++;
+        console.warn(`[LogWriter] CLEANUP_FAILED | file=${file} | ${(err as Error).message}`);
+      }
+    }
+
+    if (deletedCount > 0 || failedCount > 0) {
+      console.log(`[LogWriter] CLEANUP_COMPLETE | deleted=${deletedCount} | failed=${failedCount} | retention=${LOG_RETENTION_HOURS}h`);
+    }
+  } catch (err) {
+    console.warn(`[LogWriter] CLEANUP_ERROR | ${(err as Error).message}`);
+  }
+}
 
 /**
  * Flush all buffered log lines to their respective files
  * Uses async fs.appendFile to avoid blocking the event loop
  */
 function flushLogBuffers(): void {
+  // Check for date change and rotate if needed
+  if (shouldRotateLogFiles()) {
+    rotateLogFiles();
+  }
+
   if (logBuffer.size === 0) return;
 
   for (const [filePath, lines] of logBuffer) {
@@ -80,23 +177,58 @@ function flushLogBuffersSync(): void {
 // Start the flush interval
 flushIntervalId = setInterval(flushLogBuffers, FLUSH_INTERVAL_MS);
 
+// Start periodic cleanup interval (every 6 hours)
+cleanupIntervalId = setInterval(() => {
+  cleanupOldLogFiles().catch(err =>
+    console.warn(`[LogWriter] Cleanup interval failed: ${err.message}`)
+  );
+}, CLEANUP_INTERVAL_MS);
+
+// Run initial cleanup after 10 seconds (allow startup to complete)
+setTimeout(() => {
+  cleanupOldLogFiles().catch(err =>
+    console.warn(`[LogWriter] Initial cleanup failed: ${err.message}`)
+  );
+}, 10000);
+
 // Ensure logs are flushed on process exit
 process.on('beforeExit', () => {
   isShuttingDown = true;
+
+  // Stop intervals
   if (flushIntervalId) {
     clearInterval(flushIntervalId);
     flushIntervalId = null;
   }
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+  }
+
   flushLogBuffersSync();
 });
 
 process.on('SIGINT', () => {
   isShuttingDown = true;
+
+  // Stop intervals
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+  }
+
   flushLogBuffersSync();
 });
 
 process.on('SIGTERM', () => {
   isShuttingDown = true;
+
+  // Stop intervals
+  if (cleanupIntervalId) {
+    clearInterval(cleanupIntervalId);
+    cleanupIntervalId = null;
+  }
+
   flushLogBuffersSync();
 });
 
@@ -116,6 +248,7 @@ export interface LogMetadata {
   traitKey?: string;
   jobId?: string;
   orderHash?: string;
+  
   wallet?: string;
   identifier?: string;
   [key: string]: unknown; // Extensible for additional context
@@ -163,7 +296,11 @@ export type LogCategory =
   | 'stoptask'
   | 'taskflow'  // Consolidated task lifecycle logging - ALL state transitions in one file
   | 'system'
-  | 'wsConnection';  // Dedicated log for _doConnect() WebSocket connection errors
+  | 'wsConnection'  // Dedicated log for _doConnect() WebSocket connection errors
+  | 'taskperf'  // Performance profiling for task startup operations
+  | 'memory'  // Memory monitoring logs for crash debugging
+  | 'timing'  // Performance timing for functions and API calls
+  | 'executiontime';  // Dedicated log for processOpenseaTokenBid and openseaTokenCounterBid execution times
 
 // Prefix → Category mapping (single point of configuration)
 export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
@@ -174,7 +311,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'ServerRestart': 'startup',
   'BullMQInit': 'startup',
 
-  // Task (7)
+  // Task (8)
   'Task': 'task',
   'TaskStart': 'task',
   'TaskStatusCheck': 'task',
@@ -182,6 +319,8 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'TaskStatus': 'task',
   'TaskStateUpdate': 'task',
   'TaskRecovery': 'taskflow',  // Moved to taskflow for consolidated lifecycle logging
+  'TaskIndex': 'taskflow',     // Task index add/remove operations (contractToTasksMap, slugToTasksMap)
+  'TaskRetry': 'taskflow',     // Failed task start/stop retry operations
 
   // Scheduler (3)
   'TaskScheduler': 'scheduler',
@@ -201,7 +340,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'Counterbid': 'counterbid',
   'BidCounter': 'counterbid',   // Track own bid counting for message loss debugging
 
-  // Queue (13)
+  // Queue (17)
   'Queue': 'queue',
   'BlurQueue': 'queue',
   'BlurQueueEvents': 'queue',
@@ -214,7 +353,11 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'JobRetry': 'queue',
   'Performance': 'queue',
   'BulkJobs': 'queue',
+  'BulkJobsPerf': 'queue',       // Performance timing for processBulkJobs bottleneck detection
   'StuckJobCleanup': 'queue',
+  'QueueStats': 'queue',         // Periodic queue stats (waiting, active counts) for monitoring
+  'Limiter': 'queue',            // Bottleneck rate limiter initialization and configuration
+  'LimiterQueue': 'queue',       // Queue depth monitoring, refill triggers, health checks
 
   // Worker (6)
   'Worker': 'worker',
@@ -237,9 +380,10 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'RedisOperation': 'redis',
   'RedisRecovery': 'redis',
 
-  // Lock (2)
+  // Lock (3)
   'Lock': 'lock',
   'LockRelease': 'lock',
+  'CircuitBreaker': 'lock',   // Per-collection circuit breaker state changes
 
   // Marketplaces (3)
   'Blur': 'blur',
@@ -250,15 +394,20 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'API': 'api',
   'Blockchain': 'api',
 
-  // WebSocket (8)
+  // WebSocket (13)
   'WebSocket': 'websocket',
   'MsgLoss': 'websocket',    // Message loss detection between ws-proxy and server
   'MsgFlow': 'websocket',    // Raw message flow tracking at earliest checkpoint
+  'MsgDelivery': 'websocket', // Delivery checkpoint logging (CP4-CP7) for message flow analysis
+  'MsgDedup': 'websocket',   // Server-side message deduplication safety net logs
   'WsProxyRecv': 'websocket',     // Messages received from ws-proxy (detailed tracking)
   'WsProxyDrop': 'websocket',     // Potential drops detected during processing
   'WsProxyLag': 'websocket',      // Latency/lag detection (message timestamp vs receive time)
   'WsProxyReconnect': 'websocket', // ws-proxy reconnection events
   'WsProxyStats': 'websocket',    // Periodic stats from ws-proxy message flow
+  'BatchLatency': 'websocket',    // Batch-level latency tracking (oldestEventAge, sendDuration)
+  'EventLatency': 'websocket',    // Per-event latency breakdown in batch processing
+  'BatchBackpressure': 'websocket', // WebSocket backpressure detection (buffer full, drain timeout)
 
   // Listing (5)
   'Listing': 'listing',
@@ -276,27 +425,53 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   // Balance (1)
   'Balance': 'balance',
 
-  // Cancellation (7)
+  // Cancellation (8)
   'Cancel': 'cancellation',
   'CancellationTracking': 'cancellation',
+  'CancellationWorker': 'cancellation',  // Job processor completion tracking for stopTask debugging
   'OrderCleanup': 'cancellation',
   'BulkCancelOpensea': 'cancellation',
   'BulkCancelMagiceden': 'cancellation',
   'ValidateBidCount': 'cancellation',
   'TopBids': 'cancellation',
 
-  // StopTask Flow (5) - Detailed stopTask debugging
+  // StopTask Flow (19) - Detailed stopTask debugging
   'StopTask': 'stoptask',
   'StopTaskFlow': 'stoptask',
   'InFlightBid': 'stoptask',
-  'LimiterQueue': 'stoptask',
   'BidAbort': 'stoptask',
+  'LimiterAbort': 'stoptask',     // Limiter queue abort operations (abortPendingLimiterJobs)
+  'LimiterPending': 'stoptask',   // Pending job tracking (scheduleWithAbort)
+  'HttpAbort': 'stoptask',        // HTTP request abort operations (cancelOpenSeaRequest, cancelMagicEdenRequest)
+  'BulkAbort': 'stoptask',        // Bulk stop abort coordination (Phase 0 in stopTask/stopTasksInBatches)
+  'JobSkip': 'stoptask',          // Worker-level job skips due to blacklist check
+  // New StopTask Debug Prefixes (added 2026-01-08)
+  'StopPhase': 'stoptask',        // Phase entry/exit with timing (Phase 0-3)
+  'StopBlacklist': 'stoptask',    // Blacklist add/remove/check operations
+  'StopJobRemoval': 'stoptask',   // Job removal pass 1/2 with per-job details
+  'StopCancelOrder': 'stoptask',  // Individual order cancellation tracking
+  'StopCancelBatch': 'stoptask',  // Batch cancellation summary
+  'StopTracker': 'stoptask',      // Cancellation tracker operations
+  'StopPercentage': 'stoptask',   // Percentage calculation and updates
+  'StopCleanup': 'stoptask',      // Resource cleanup operations
+  'StopTiming': 'stoptask',       // Performance timing measurements
+  'StopRace': 'stoptask',         // Potential race condition detection
 
-  // Health (4)
+  // Health (3)
   'Health': 'health',
   'HealthCheck': 'health',
   'ConnectivityMonitor': 'health',
-  'EventLoop': 'health',  // Event loop lag monitoring - detects blocked event loop
+
+  // Memory (1)
+  'MemoryMonitor': 'memory',  // Memory monitoring logs for crash debugging
+
+  // Timing (3)
+  'Timing': 'timing',           // Function execution timing
+  'TimingAPI': 'timing',        // API call timing
+  'TimingFunc': 'timing',       // Function-level timing
+
+  // ExecutionTime (1)
+  'ExecutionTime': 'executiontime',  // Dedicated log for processOpenseaTokenBid and openseaTokenCounterBid execution times
 
   // Metadata (2)
   'Metadata': 'metadata',
@@ -315,6 +490,9 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'UnhandledRejection': 'system',
   'UncaughtException': 'system',
   'TaskState': 'task',
+  'ConcurrencyAlloc': 'system',      // Dynamic concurrency allocation between workers
+  'ConcurrencyReconcile': 'system',  // Periodic reconciliation for drift detection
+  'ConcurrencyManager': 'system',    // Concurrency manager initialization and setup
 
   // TaskFlow - Consolidated task lifecycle logging (all go to taskflow-YYYY-MM-DD.log)
   // This category captures the ENTIRE task lifecycle for debugging stuck tasks
@@ -330,9 +508,39 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   'TimerOp': 'taskflow',            // Timer creation/expiration/cleanup
   'StuckTaskCheck': 'taskflow',     // checkStuckTasks() - stuck task detection and recovery
   'TimerDiagnostic': 'taskflow',    // Periodic timer map diagnostics
+  'DirectExecution': 'taskflow',    // executeMarketplaceBidLoop() - direct timer execution (replaces SCHEDULE jobs)
+  'LoopStats': 'taskflow',          // Loop counter operations (loopCounterStats increments)
+  'StatsReset': 'taskflow',         // Skip/error stats resets at loop start
+
+  // Bulk Start and StartTask Flow (all go to taskflow-YYYY-MM-DD.log)
+  'BulkStart': 'taskflow',          // startTasksInBatches() - bulk task start operations
+  'StartTask': 'taskflow',          // startTask() - individual task start entry with retry logic
+  'StartInternal': 'taskflow',      // startTaskInternal() - core task start implementation
+  'TaskInit': 'taskflow',           // Task initialization phases (order cache, bid stats, approvals, etc.)
+  'MarketplaceExec': 'taskflow',    // executeMarketplaceBidLoop() - marketplace execution scheduling
+  'BulkUpdate': 'taskflow',         // updateMultipleTasksStatus() - API entry point for bulk start/stop
+
+  // Job Processing Debug Logging (all go to taskflow-YYYY-MM-DD.log)
+  // Added 2026-01-06 to diagnose job queueing and execution issues
+  'ParentJobOp': 'taskflow',        // Parent job create/update/delete/lookup operations
+  'JobQueue': 'taskflow',           // Job queueing in processBulkJobs - entry, chunks, capacity wait
+  'RecoveryMech': 'taskflow',       // Recovery mechanism triggers (queueingTaskWatchdog, checkStuckTasks, orphanRecovery)
+  'WorkerJob': 'taskflow',          // Worker job processing flow - job received, processed, skipped
+  'CapacityWait': 'taskflow',       // Queue capacity wait loops with timing and counts
+  'ChunkProcess': 'taskflow',       // Chunk processing in processBulkJobs - timing and job counts
+  'MarkJob': 'taskflow',            // markJobAsProcessed flow - entry, lookup, success, silent returns
 
   // WebSocket connection error logging (dedicated file for _doConnect() errors)
   'WsConnection': 'wsConnection',
+
+  // Task Performance Profiling (all go to taskperf-YYYY-MM-DD.log)
+  // Added 2026-01-08 to diagnose task startup performance bottlenecks
+  'PerfEntry': 'taskperf',           // Function entry with timestamp
+  'PerfExit': 'taskperf',            // Function exit with duration
+  'PerfPhase': 'taskperf',           // Phase completion within a function
+  'PerfBlock': 'taskperf',           // Blocking operation start/end
+  'PerfLoop': 'taskperf',            // Loop iteration timing
+  'PerfAwait': 'taskperf',           // Await operation timing
 };
 
 // ============================================
@@ -507,7 +715,7 @@ export function getAllCategories(): LogCategory[] {
     'startup', 'task', 'scheduler', 'bidflow', 'counterbid', 'queue', 'worker',
     'database', 'redis', 'lock', 'blur', 'opensea', 'magiceden', 'api', 'websocket',
     'listing', 'collection', 'balance', 'cancellation', 'health', 'metadata', 'stoptask',
-    'taskflow', 'system', 'wsConnection'
+    'taskflow', 'system', 'wsConnection', 'taskperf', 'memory', 'timing'
   ];
 }
 
@@ -531,35 +739,6 @@ export function getMarketplaceCategories(marketplace: string): LogCategory[] {
 // ============================================
 // PUBLIC API (with optional metadata support)
 // ============================================
-
-/**
- * Log a debug message to both console and file.
- * Only logs when DEBUG=true.
- * EXCEPTION: 'taskflow' category always logs (critical for debugging stuck tasks).
- * Routes to category-specific log file based on prefix.
- *
- * @param prefix - Log prefix category (e.g., 'TaskScheduler', 'BidFlow', 'STARTUP')
- * @param message - Log message content
- * @param metadata - Optional structured metadata for filtering (taskId, marketplace, slug, etc.)
- */
-export function debugLog(prefix: string, message: string, metadata?: LogMetadata): void {
-  // Always log taskflow category (critical for debugging stuck tasks)
-  const category = getCategoryForPrefix(prefix);
-  const isTaskflow = category === 'taskflow';
-
-  // Skip non-taskflow logs if DEBUG is off
-  if (!isTaskflow && !DEBUG) return;
-
-  const timestamp = new Date().toISOString();
-  const metaStr = formatMetadata(metadata);
-  const logLine = `[${timestamp}] [${prefix}] ${message}${metaStr}`;
-
-  // Console output
-  console.log(logLine);
-
-  // File output (append to category-specific file)
-  writeToFile(logLine, prefix);
-}
 
 /**
  * Log an error message to both console and file.
@@ -605,23 +784,61 @@ export function warnLog(prefix: string, message: string, metadata?: LogMetadata)
   writeToFile(logLine, prefix);
 }
 
+// ============================================
+// PERFORMANCE TIMING UTILITIES
+// ============================================
+
 /**
- * Log an info message to both console and file.
- * ALWAYS logs regardless of DEBUG flag (for important status messages).
- * Routes to category-specific log file based on prefix.
+ * Sanitize API response/request data for logging.
+ * Removes sensitive fields and truncates large objects.
  *
- * @param prefix - Log prefix category (e.g., 'WebSocket', 'STARTUP')
- * @param message - Info message content
- * @param metadata - Optional structured metadata for filtering (taskId, marketplace, slug, etc.)
+ * @param data - Data object to sanitize
+ * @param maxSize - Maximum size in characters before truncation (default: 5000)
+ * @returns Sanitized data object
  */
-export function infoLog(prefix: string, message: string, metadata?: LogMetadata): void {
-  const timestamp = new Date().toISOString();
-  const metaStr = formatMetadata(metadata);
-  const logLine = `[${timestamp}] [INFO][${prefix}] ${message}${metaStr}`;
+export function sanitizeLogData(data: any, maxSize: number = 5000): any {
+  if (!data) return data;
 
-  // Console output
-  console.log(logLine);
+  // Primitives pass through
+  if (typeof data !== 'object') return data;
 
-  // File output (append to category-specific file)
-  writeToFile(logLine, prefix);
+  // Create shallow copy to avoid mutating original
+  const sanitized = Array.isArray(data) ? [...data] : { ...data };
+
+  // Remove sensitive fields (recursive for nested objects)
+  const sensitiveFields = ['privateKey', 'encryptedPrivateKey', 'signature', 'auth', 'authorization'];
+
+  const removeSensitiveFields = (obj: any): any => {
+    if (!obj || typeof obj !== 'object') return obj;
+
+    if (Array.isArray(obj)) {
+      return obj.map(item => removeSensitiveFields(item));
+    }
+
+    const cleaned: any = {};
+    for (const [key, value] of Object.entries(obj)) {
+      if (sensitiveFields.includes(key)) {
+        cleaned[key] = '[REDACTED]';
+      } else if (typeof value === 'object' && value !== null) {
+        cleaned[key] = removeSensitiveFields(value);
+      } else {
+        cleaned[key] = value;
+      }
+    }
+    return cleaned;
+  };
+
+  const cleaned = removeSensitiveFields(sanitized);
+
+  // Convert to string and check size
+  const str = JSON.stringify(cleaned);
+  if (str.length > maxSize) {
+    return {
+      _truncated: true,
+      _originalSize: str.length,
+      _preview: str.substring(0, maxSize) + '...'
+    };
+  }
+
+  return cleaned;
 }

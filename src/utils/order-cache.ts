@@ -1,8 +1,8 @@
-import Order from '../models/order.model';
-import { errorLog, debugLog } from './debug-file-logger';
+import { LRUCache } from 'lru-cache';
+import { errorLog, warnLog} from './debug-file-logger';
+import { queue, CANCEL_OPENSEA_BID, CANCEL_BLUR_BID, CANCEL_MAGICEDEN_BID } from '../index';
 
 export interface CachedOrder {
-  _id: string;
   orderHash: string;
   expiresAt: number; // timestamp in ms
   offerPrice: string; // wei
@@ -13,285 +13,172 @@ export interface CachedOrder {
   taskId: string;
 }
 
-const DEBUG = process.env.DEBUG === 'true';
+// LRU cache for orders (in-memory only, no Redis)
+// IMPORTANT: Each entry now stores an ARRAY of CachedOrder[] to support multiple orders per identifier
+const orderLRU = new LRUCache<string, CachedOrder[]>({
+  max: 1000000,           // 1M entries max (handle more concurrent active orders)
+  ttl: 24 * 60 * 60 * 1000, // 24 hours TTL (safety net, manual expiration via expiresAt still primary)
+  allowStale: false,
+  updateAgeOnGet: false,
+  updateAgeOnHas: false
+});
+
+// Protected tasks - orders for these tasks will NOT be deleted
+const PROTECTED_TASK_IDS = new Set<string>([
+  '6980b274d1b3547aa07f6a9a'  // Preserve for debugging order cleanup issue
+]);
+
+/**
+ * Check if a task is protected from deletion
+ */
+function isProtectedTask(taskId: string): boolean {
+  return PROTECTED_TASK_IDS.has(taskId);
+}
+
+// Cache statistics
+interface CacheStats {
+  hits: number;
+  misses: number;
+}
+
+const stats = {
+  lru: { hits: 0, misses: 0 } as CacheStats,
+  replacements: { total: 0, cancelled: 0, failed: 0 },
+  deletions: { attempted: 0, succeeded: 0, failed: 0 },
+  startTime: Date.now()
+};
+
+// Tracking functions
+const trackLruHit = () => stats.lru.hits++;
+const trackLruMiss = () => stats.lru.misses++;
+
+/**
+ * Get cache statistics for monitoring
+ */
+export function getOrderCacheStats() {
+  const uptime = Math.floor((Date.now() - stats.startTime) / 1000 / 60);
+  const lruTotal = stats.lru.hits + stats.lru.misses;
+
+  return {
+    lru: {
+      hits: stats.lru.hits,
+      misses: stats.lru.misses,
+      hitRate: lruTotal > 0 ? `${((stats.lru.hits / lruTotal) * 100).toFixed(1)}%` : 'N/A',
+      size: orderLRU.size,
+      max: orderLRU.max
+    },
+    replacements: {
+      total: stats.replacements.total,
+      cancelled: stats.replacements.cancelled,
+      failed: stats.replacements.failed,
+      successRate: stats.replacements.total > 0
+        ? `${((stats.replacements.cancelled / stats.replacements.total) * 100).toFixed(1)}%`
+        : 'N/A'
+    },
+    deletions: {
+      attempted: stats.deletions.attempted,
+      succeeded: stats.deletions.succeeded,
+      failed: stats.deletions.failed,
+      successRate: stats.deletions.attempted > 0
+        ? `${((stats.deletions.succeeded / stats.deletions.attempted) * 100).toFixed(1)}%`
+        : 'N/A'
+    },
+    uptime: `${uptime}min`
+  };
+}
+
+/**
+ * Reset cache statistics (for testing)
+ */
+export function resetOrderCacheStats() {
+  stats.lru.hits = 0;
+  stats.lru.misses = 0;
+  stats.replacements.total = 0;
+  stats.replacements.cancelled = 0;
+  stats.replacements.failed = 0;
+  stats.deletions.attempted = 0;
+  stats.deletions.succeeded = 0;
+  stats.deletions.failed = 0;
+  stats.startTime = Date.now();
+}
+
+// Log stats every 5 minutes (aggregated, not per-access)
+setInterval(() => {
+  const cacheStats = getOrderCacheStats();
+
+  // Log replacement stats if any occurred
+  if (cacheStats.replacements.total > 0) {
+  }
+}, 5 * 60 * 1000);
+
+/**
+ * Queue cancellation for a replaced order
+ * Fire-and-forget pattern - doesn't block new bid placement
+ * Accepts either a full CachedOrder or partial order data
+ */
+export async function queueReplacedOrderCancellation(
+  oldOrder: CachedOrder | {
+    taskId: string;
+    orderHash: string;
+    marketplace: string;
+    identifier?: string;
+    slug?: string;
+    reason?: string;
+  },
+  reason?: string
+): Promise<void> {
+  try {
+    stats.replacements.total++;
+
+    // Extract reason from object or parameter
+    const cancelReason = ('reason' in oldOrder && oldOrder.reason) || reason || 'replaced_by_new_bid';
+
+    const marketplace = oldOrder.marketplace.toLowerCase();
+    const jobType = marketplace === 'opensea'
+      ? CANCEL_OPENSEA_BID
+      : marketplace === 'blur'
+        ? CANCEL_BLUR_BID
+        : marketplace === 'magiceden'
+          ? CANCEL_MAGICEDEN_BID
+          : null;
+
+    if (!jobType) {
+      warnLog('OrderCache', `[CANCEL_SKIP] Unknown marketplace: ${marketplace}`);
+      stats.replacements.failed++;
+      return;
+    }
+
+    await queue.add(
+      jobType,
+      {
+        taskId: oldOrder.taskId,
+        orderHash: oldOrder.orderHash,
+        orderId: oldOrder.orderHash,
+        slug: oldOrder.slug || '',
+        marketplace: oldOrder.marketplace,
+        identifier: oldOrder.identifier,
+        reason: cancelReason
+      },
+      {
+        jobId: `cancel-${oldOrder.orderHash}-${Date.now()}`,
+        priority: 1 // Medium priority (after counterbids, before scheduled bids)
+      }
+    );
+
+    stats.replacements.cancelled++;
+  } catch (error) {
+    stats.replacements.failed++;
+    errorLog('OrderCache', `[CANCEL_QUEUE_ERROR] Failed to queue cancellation for ${oldOrder.orderHash}`, error as Error);
+  }
+}
 
 class OrderCache {
-  private cache: Map<string, CachedOrder> = new Map();
-  private taskIndex: Map<string, Set<string>> = new Map(); // taskId -> Set of cache keys
-  private idIndex: Map<string, string> = new Map(); // orderId -> cache key (for deleteById)
-  private initializedTasks: Set<string> = new Set(); // tracks which tasks have been initialized
-
   /**
-   * Generate cache key from taskId, marketplace, and identifier
-   * Format: "{taskId}:{marketplace}:{identifier}"
+   * Generate LRU cache key
+   * Format: "taskId:marketplace:identifier"
    */
-  private getKey(taskId: string, marketplace: string, identifier: string): string {
+  private getLruKey(taskId: string, marketplace: string, identifier: string): string {
     return `${taskId}:${marketplace.toLowerCase()}:${identifier}`;
-  }
-
-  /**
-   * Add or update an order in the cache
-   */
-  set(order: CachedOrder): void {
-    const key = this.getKey(order.taskId, order.marketplace, order.identifier);
-
-    // Update main cache
-    this.cache.set(key, order);
-
-    // Update task index
-    if (!this.taskIndex.has(order.taskId)) {
-      this.taskIndex.set(order.taskId, new Set());
-    }
-    this.taskIndex.get(order.taskId)!.add(key);
-
-    // Update id index
-    this.idIndex.set(order._id, key);
-  }
-
-  /**
-   * Get a single order from cache (filters out expired orders)
-   */
-  get(taskId: string, marketplace: string, identifier: string): CachedOrder | undefined {
-    const key = this.getKey(taskId, marketplace, identifier);
-    const order = this.cache.get(key);
-
-    // Filter out expired orders and clean them from cache
-    if (order && this.isExpired(order)) {
-      if (DEBUG) {
-        debugLog('Cache', `[OrderCache] GET | key=${key} | EXPIRED - cleaning from cache | expiresAt=${new Date(order.expiresAt).toISOString()}`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
-      }
-      // Clean up expired order from cache
-      this.idIndex.delete(order._id);
-      this.cache.delete(key);
-      const taskKeys = this.taskIndex.get(taskId);
-      if (taskKeys) {
-        taskKeys.delete(key);
-        if (taskKeys.size === 0) {
-          this.taskIndex.delete(taskId);
-        }
-      }
-      return undefined;
-    }
-
-    return order;
-  }
-
-  /**
-   * Delete a single order from cache
-   */
-  delete(taskId: string, marketplace: string, identifier: string): boolean {
-    const key = this.getKey(taskId, marketplace, identifier);
-    const order = this.cache.get(key);
-
-    if (order) {
-      // Remove from id index
-      this.idIndex.delete(order._id);
-    }
-
-    // Remove from task index
-    const taskKeys = this.taskIndex.get(taskId);
-    if (taskKeys) {
-      taskKeys.delete(key);
-      if (taskKeys.size === 0) {
-        this.taskIndex.delete(taskId);
-      }
-    }
-
-    const deleted = this.cache.delete(key);
-
-    return deleted;
-  }
-
-  /**
-   * Delete order by its _id (used in cancellation callbacks)
-   */
-  deleteById(orderId: string): boolean {
-    const key = this.idIndex.get(orderId);
-    if (!key) {
-      return false;
-    }
-
-    const order = this.cache.get(key);
-    if (order) {
-      return this.delete(order.taskId, order.marketplace, order.identifier);
-    }
-
-    return false;
-  }
-
-  /**
-   * Delete all orders for a task
-   */
-  deleteByTask(taskId: string): void {
-    const taskKeys = this.taskIndex.get(taskId);
-    if (!taskKeys) {
-      return;
-    }
-
-    let deletedCount = 0;
-    for (const key of taskKeys) {
-      const order = this.cache.get(key);
-      if (order) {
-        this.idIndex.delete(order._id);
-      }
-      this.cache.delete(key);
-      deletedCount++;
-    }
-
-    this.taskIndex.delete(taskId);
-    this.initializedTasks.delete(taskId);
-
-    if (DEBUG) {
-      debugLog('Cache', `[OrderCache] DELETE_BY_TASK | taskId=${taskId} | deleted=${deletedCount}`, { taskId });
-    }
-  }
-
-  /**
-   * Delete all orders for a task/marketplace combination
-   */
-  deleteByTaskAndMarketplace(taskId: string, marketplace: string): void {
-    const taskKeys = this.taskIndex.get(taskId);
-    if (!taskKeys) {
-      return;
-    }
-
-    const marketplaceLower = marketplace.toLowerCase();
-    const keysToDelete: string[] = [];
-
-    for (const key of taskKeys) {
-      if (key.includes(`:${marketplaceLower}:`)) {
-        keysToDelete.push(key);
-      }
-    }
-
-    for (const key of keysToDelete) {
-      const order = this.cache.get(key);
-      if (order) {
-        this.idIndex.delete(order._id);
-      }
-      this.cache.delete(key);
-      taskKeys.delete(key);
-    }
-
-    if (taskKeys.size === 0) {
-      this.taskIndex.delete(taskId);
-    }
-
-    if (DEBUG) {
-      debugLog('Cache', `[OrderCache] DELETE_BY_TASK_MARKETPLACE | taskId=${taskId} | marketplace=${marketplace} | deleted=${keysToDelete.length}`, { taskId, marketplace: marketplace as 'blur' | 'opensea' | 'magiceden' });
-    }
-  }
-
-  /**
-   * Get all orders for a task (including expired)
-   */
-  getByTask(taskId: string): CachedOrder[] {
-    const taskKeys = this.taskIndex.get(taskId);
-    if (!taskKeys) {
-      return [];
-    }
-
-    const orders: CachedOrder[] = [];
-    for (const key of taskKeys) {
-      const order = this.cache.get(key);
-      if (order) {
-        orders.push(order);
-      }
-    }
-
-    return orders;
-  }
-
-  /**
-   * Get all active (non-expired) orders for a task
-   */
-  getActiveByTask(taskId: string): CachedOrder[] {
-    return this.getByTask(taskId).filter(order => !this.isExpired(order));
-  }
-
-  /**
-   * Get all active orders for a task and marketplace
-   */
-  getByTaskAndMarketplace(taskId: string, marketplace: string): CachedOrder[] {
-    const taskKeys = this.taskIndex.get(taskId);
-    if (!taskKeys) {
-      return [];
-    }
-
-    const marketplaceLower = marketplace.toLowerCase();
-    const orders: CachedOrder[] = [];
-
-    for (const key of taskKeys) {
-      if (key.includes(`:${marketplaceLower}:`)) {
-        const order = this.cache.get(key);
-        if (order && !this.isExpired(order)) {
-          orders.push(order);
-        }
-      }
-    }
-
-    return orders;
-  }
-
-  /**
-   * Get orders by task and list of identifiers (for cancelRemovedTokenBids/cancelRemovedTraitBids)
-   */
-  getByTaskAndIdentifiers(taskId: string, identifiers: string[], marketplace?: string): CachedOrder[] {
-    const taskKeys = this.taskIndex.get(taskId);
-    if (!taskKeys) {
-      return [];
-    }
-
-    const identifierSet = new Set(identifiers);
-    const marketplaceLower = marketplace?.toLowerCase();
-    const orders: CachedOrder[] = [];
-
-    for (const key of taskKeys) {
-      const order = this.cache.get(key);
-      if (order && identifierSet.has(order.identifier)) {
-        if (!marketplaceLower || order.marketplace.toLowerCase() === marketplaceLower) {
-          orders.push(order);
-        }
-      }
-    }
-
-    return orders;
-  }
-
-  /**
-   * Count active orders by task and marketplace
-   */
-  countByTaskAndMarketplace(taskId: string, marketplace: string): number {
-    return this.getByTaskAndMarketplace(taskId, marketplace).length;
-  }
-
-  /**
-   * Count total active (non-expired) orders for a task
-   */
-  countByTask(taskId: string): number {
-    return this.getActiveByTask(taskId).length;
-  }
-
-  /**
-   * Count all active orders grouped by marketplace (for bidStats)
-   */
-  countGroupedByMarketplace(taskId: string): { [marketplace: string]: number } {
-    const taskKeys = this.taskIndex.get(taskId);
-    if (!taskKeys) {
-      return {};
-    }
-
-    const counts: { [marketplace: string]: number } = {};
-
-    for (const key of taskKeys) {
-      const order = this.cache.get(key);
-      if (order && !this.isExpired(order)) {
-        const mp = order.marketplace.toLowerCase();
-        counts[mp] = (counts[mp] || 0) + 1;
-      }
-    }
-
-    return counts;
   }
 
   /**
@@ -302,113 +189,497 @@ class OrderCache {
   }
 
   /**
-   * Get the offer price for a specific order (for counterbid comparison)
-   * Returns price as number (wei), or null if no active order exists
+   * Clear all orders from LRU cache
+   * Called during cleanup or testing
    */
-  getOfferPrice(taskId: string, marketplace: string, identifier: string): number | null {
-    const order = this.get(taskId, marketplace, identifier);
-    if (!order || this.isExpired(order)) {
-      return null;
-    }
-    return Number(order.offerPrice);
+  public clearLruCache(): void {
+    orderLRU.clear();
   }
 
   /**
-   * Clean up expired orders from cache
+   * Get LRU cache size for monitoring
    */
-  cleanupExpired(): void {
-    const now = Date.now();
-    let cleanedCount = 0;
+  public getLruCacheSize(): number {
+    return orderLRU.size;
+  }
 
-    for (const [key, order] of this.cache) {
-      if (order.expiresAt <= now) {
-        this.idIndex.delete(order._id);
-        this.cache.delete(key);
 
-        const taskKeys = this.taskIndex.get(order.taskId);
-        if (taskKeys) {
-          taskKeys.delete(key);
-          if (taskKeys.size === 0) {
-            this.taskIndex.delete(order.taskId);
+  /**
+   * Set/update an order in cache (sync, LRU only)
+   * IMPORTANT: Appends to array instead of replacing (supports multiple orders per identifier)
+   */
+  set(order: CachedOrder): void {
+    const lruKey = this.getLruKey(order.taskId, order.marketplace, order.identifier);
+    const existing = orderLRU.get(lruKey) || [];
+
+    // Check if order already exists (by orderHash) to prevent duplicates
+    const isDuplicate = existing.some(o => o.orderHash === order.orderHash);
+    if (!isDuplicate) {
+      existing.push(order);
+      // Sort newest first (for getNewest() helper)
+      existing.sort((a, b) => b.createdAt - a.createdAt);
+    }
+
+    orderLRU.set(lruKey, existing);
+  }
+
+  /**
+   * Get all orders for taskId, marketplace, and identifier (sync)
+   * Returns array of orders, or undefined if none found
+   * IMPORTANT: Returns array to support multiple orders per identifier
+   */
+  get(taskId: string, marketplace: string, identifier: string): CachedOrder[] | undefined {
+    const lruKey = this.getLruKey(taskId, marketplace, identifier);
+    const cached = orderLRU.get(lruKey);
+
+    if (!cached || cached.length === 0) {
+      trackLruMiss();
+      return undefined;
+    }
+
+    // Filter out expired orders (lazy cleanup)
+    const activeOrders = cached.filter(order => !this.isExpired(order));
+
+    if (activeOrders.length === 0) {
+      orderLRU.delete(lruKey); // All expired
+      trackLruMiss();
+      return undefined;
+    }
+
+    // Update cache with only active orders if any were filtered out
+    if (activeOrders.length !== cached.length) {
+      orderLRU.set(lruKey, activeOrders);
+    }
+
+    trackLruHit();
+    return activeOrders; // Already sorted by createdAt DESC from set()
+  }
+
+  /**
+   * Get newest order for identifier (most recent createdAt)
+   * Helper for single-order logic that needs latest bid
+   */
+  getNewest(taskId: string, marketplace: string, identifier: string): CachedOrder | undefined {
+    const orders = this.get(taskId, marketplace, identifier);
+    return orders?.[0]; // First element is newest (sorted DESC)
+  }
+
+  /**
+   * Get oldest order for identifier (earliest createdAt)
+   * Useful for FIFO cleanup or cancellation
+   */
+  getOldest(taskId: string, marketplace: string, identifier: string): CachedOrder | undefined {
+    const orders = this.get(taskId, marketplace, identifier);
+    return orders?.[orders.length - 1]; // Last element is oldest
+  }
+
+  /**
+   * Get order count for identifier
+   */
+  getCount(taskId: string, marketplace: string, identifier: string): number {
+    const orders = this.get(taskId, marketplace, identifier);
+    return orders?.length || 0;
+  }
+
+  /**
+   * Delete order by taskId, marketplace, and identifier (sync)
+   * IMPORTANT: Deletes ALL orders for this identifier
+   */
+  delete(taskId: string, marketplace: string, identifier: string): boolean {
+    if (isProtectedTask(taskId)) {
+      return false;
+    }
+
+    const lruKey = this.getLruKey(taskId, marketplace, identifier);
+    const existing = orderLRU.get(lruKey);
+    const deleted = orderLRU.delete(lruKey);
+
+    if (deleted) {
+      const count = existing?.length || 0;
+    }
+
+    return deleted;
+  }
+
+  /**
+   * Delete specific order by orderHash from identifier array
+   * Useful for selective cancellation
+   */
+  deleteOne(taskId: string, marketplace: string, identifier: string, orderHash: string): boolean {
+    stats.deletions.attempted++;
+
+    if (isProtectedTask(taskId)) {
+      stats.deletions.failed++;
+      return false;
+    }
+
+    const lruKey = this.getLruKey(taskId, marketplace, identifier);
+    const existing = orderLRU.get(lruKey);
+
+    if (!existing) {
+      stats.deletions.failed++;
+      return false;
+    }
+
+    const filtered = existing.filter(order => order.orderHash !== orderHash);
+
+    if (filtered.length === existing.length) {
+      stats.deletions.failed++;
+      return false; // Not found
+    }
+
+    if (filtered.length === 0) {
+      orderLRU.delete(lruKey); // No orders left
+    } else {
+      orderLRU.set(lruKey, filtered);
+    }
+
+    stats.deletions.succeeded++;
+    return true;
+  }
+
+
+  /**
+   * Get all active (non-expired) orders for a task
+   * IMPORTANT: Flattens arrays to return all orders
+   */
+  getActiveByTask(taskId: string): CachedOrder[] {
+    const allOrders: CachedOrder[] = [];
+
+    for (const [, orders] of orderLRU.entries()) {
+      for (const order of orders) {
+        if (order.taskId === taskId) {
+          if (!this.isExpired(order)) {
+            allOrders.push(order);
+          }
+          // Note: Lazy cleanup handled by get() method
+        }
+      }
+    }
+
+    return allOrders;
+  }
+
+  /**
+   * Get all active (non-expired) orders for a task and marketplace
+   * IMPORTANT: Flattens arrays to return all orders
+   */
+  getByTaskAndMarketplace(taskId: string, marketplace: string): CachedOrder[] {
+    const allOrders: CachedOrder[] = [];
+    const marketplaceLower = marketplace.toLowerCase();
+
+    for (const [, orders] of orderLRU.entries()) {
+      for (const order of orders) {
+        if (order.taskId === taskId && order.marketplace.toLowerCase() === marketplaceLower) {
+          if (!this.isExpired(order)) {
+            allOrders.push(order);
           }
         }
-
-        cleanedCount++;
       }
     }
 
-    if (DEBUG && cleanedCount > 0) {
-      debugLog('Cache', `[OrderCache] CLEANUP | removed=${cleanedCount} expired orders`);
-    }
+    return allOrders;
   }
 
   /**
-   * Initialize cache from database for a specific task (lazy loading)
+   * Get all orders for a task (including expired, for cleanup)
+   * IMPORTANT: Flattens arrays to return all orders
    */
-  async initializeFromDatabase(taskId: string): Promise<void> {
-    if (this.initializedTasks.has(taskId)) {
-      return;
-    }
+  getAllByTask(taskId: string): CachedOrder[] {
+    const allOrders: CachedOrder[] = [];
 
-    try {
-      const orders = await Order.find({
-        taskId: taskId,
-        expiresAt: { $gt: new Date() }
-      }).lean();
-
+    for (const [, orders] of orderLRU.entries()) {
       for (const order of orders) {
-        this.set({
-          _id: order._id.toString(),
-          orderHash: order.orderHash,
-          expiresAt: new Date(order.expiresAt).getTime(),
-          offerPrice: order.offerPrice,
-          createdAt: new Date(order.createdAt).getTime(),
-          identifier: order.identifier,
-          marketplace: order.marketplace,
-          slug: order.slug,
-          taskId: order.taskId
-        });
+        if (order.taskId === taskId) {
+          allOrders.push(order);
+        }
       }
-
-      this.initializedTasks.add(taskId);
-
-      debugLog('Cache', `[OrderCache] INIT: taskId=${taskId} | loaded ${orders.length} orders from database`);
-    } catch (error) {
-      errorLog('Cache', `[OrderCache] INIT ERROR | taskId=${taskId}`, error);
     }
+
+    return allOrders;
   }
 
   /**
-   * Check if a task's cache has been initialized
+   * Count active orders grouped by marketplace for a task
+   * IMPORTANT: Counts all orders in arrays (not unique identifiers)
    */
-  isTaskInitialized(taskId: string): boolean {
-    return this.initializedTasks.has(taskId);
+  countGroupedByMarketplace(taskId: string): Record<string, number> {
+    const counts: Record<string, number> = {};
+
+    // Iterate through all LRU entries and clean up expired orders (lazy cleanup)
+    for (const [lruKey, orders] of orderLRU.entries()) {
+      // Filter expired orders for this key
+      const activeOrders = orders.filter(order => {
+        // Skip cleanup for protected tasks
+        if (order.taskId === taskId && isProtectedTask(taskId)) {
+          return true; // Keep all orders (don't expire)
+        }
+
+        // Only process orders for this task
+        if (order.taskId === taskId) {
+          if (!this.isExpired(order)) {
+            // Count non-expired order
+            const marketplace = order.marketplace.toLowerCase();
+            counts[marketplace] = (counts[marketplace] || 0) + 1;
+            return true;  // Keep in array
+          }
+          // Expired order for this task - don't count, remove from array
+          return false;
+        }
+        // Order belongs to different task - keep in array
+        return true;
+      });
+
+      // Update cache if we removed any orders
+      if (activeOrders.length !== orders.length) {
+        if (activeOrders.length === 0) {
+          orderLRU.delete(lruKey);  // All orders expired - delete key
+        } else {
+          orderLRU.set(lruKey, activeOrders);  // Update with filtered array
+        }
+      }
+    }
+
+    return counts;
   }
 
   /**
-   * Get cache statistics for debugging
+   * Delete all orders for a task (both active and expired)
+   * IMPORTANT: Counts total orders deleted from all arrays
    */
-  getStats(): { totalOrders: number; taskCount: number; initializedTasks: number } {
+  deleteByTask(taskId: string): number {
+    if (isProtectedTask(taskId)) {
+      return 0;
+    }
+
+    let deletedCount = 0;
+
+    for (const [lruKey, orders] of orderLRU.entries()) {
+      // Check if any order in this array belongs to the task
+      const hasTaskOrder = orders.some(order => order.taskId === taskId);
+      if (hasTaskOrder) {
+        // Count how many orders we're deleting
+        const taskOrders = orders.filter(order => order.taskId === taskId);
+        deletedCount += taskOrders.length;
+        orderLRU.delete(lruKey);
+      }
+    }
+
+    if (deletedCount > 0) {
+    }
+
+    return deletedCount;
+  }
+
+  /**
+   * Get order by orderHash within a task (O(n) scan)
+   * IMPORTANT: Scans arrays for matching order
+   */
+  getByOrderHash(taskId: string, orderHash: string): CachedOrder | undefined {
+    for (const [, orders] of orderLRU.entries()) {
+      for (const order of orders) {
+        if (order.taskId === taskId && order.orderHash === orderHash) {
+          if (!this.isExpired(order)) {
+            trackLruHit();
+            return order;
+          } else {
+            // Order found but expired - don't return it
+            trackLruMiss();
+            return undefined;
+          }
+        }
+      }
+    }
+
+    trackLruMiss();
+    return undefined;
+  }
+
+  /**
+   * Check if order exists (by taskId, marketplace, identifier)
+   */
+  has(taskId: string, marketplace: string, identifier: string): boolean {
+    const order = this.get(taskId, marketplace, identifier);
+    return order !== undefined;
+  }
+
+  /**
+   * Update order's expiresAt timestamp
+   * IMPORTANT: Updates the newest order for the identifier
+   */
+  updateExpiresAt(taskId: string, marketplace: string, identifier: string, newExpiresAt: number): boolean {
+    const order = this.getNewest(taskId, marketplace, identifier);
+    if (!order) {
+      return false;
+    }
+
+    order.expiresAt = newExpiresAt;
+    this.set(order);
+    return true;
+  }
+
+  /**
+   * Count total orders for a task (active only)
+   * Optional marketplace filter (can be single string or array)
+   */
+  countByTask(taskId: string, options?: { marketplace?: string | string[] }): number {
+    if (options?.marketplace) {
+      const marketplaces = Array.isArray(options.marketplace)
+        ? options.marketplace
+        : [options.marketplace];
+
+      return this.getActiveByTask(taskId).filter(order =>
+        marketplaces.some(m => order.marketplace.toLowerCase() === m.toLowerCase())
+      ).length;
+    }
+    return this.getActiveByTask(taskId).length;
+  }
+
+  /**
+   * Count orders for task and marketplace (active only)
+   */
+  countByTaskAndMarketplace(taskId: string, marketplace: string): number {
+    return this.getByTaskAndMarketplace(taskId, marketplace).length;
+  }
+
+  /**
+   * Count valid (non-expired) orders grouped by marketplace for a task
+   * Returns record with counts per marketplace
+   */
+  countValidByTaskAndMarketplace(taskId: string): Record<string, number> {
+    return this.countGroupedByMarketplace(taskId);
+  }
+
+  /**
+   * Delete orders by task and marketplace
+   * IMPORTANT: Counts total orders deleted from all arrays
+   */
+  deleteByTaskAndMarketplace(taskId: string, marketplace: string): number {
+    if (isProtectedTask(taskId)) {
+      return 0;
+    }
+
+    let deletedCount = 0;
+    const marketplaceLower = marketplace.toLowerCase();
+
+    for (const [lruKey, orders] of orderLRU.entries()) {
+      // Check if any order in this array matches task and marketplace
+      const matchingOrders = orders.filter(
+        order => order.taskId === taskId && order.marketplace.toLowerCase() === marketplaceLower
+      );
+
+      if (matchingOrders.length > 0) {
+        deletedCount += matchingOrders.length;
+        orderLRU.delete(lruKey);
+      }
+    }
+
+    if (deletedCount > 0) {
+    }
+
+    return deletedCount;
+  }
+
+  /**
+   * Get orders by task and list of identifiers
+   * Can be called with 2 args (all marketplaces) or 3 args (specific marketplace)
+   * IMPORTANT: Returns all orders for matching identifiers (flattens arrays)
+   */
+  getByTaskAndIdentifiers(taskId: string, identifiers: string[], marketplace?: string): CachedOrder[] {
+    const allOrders: CachedOrder[] = [];
+    const identifierSet = new Set(identifiers);
+
+    if (marketplace) {
+      // Specific marketplace - use direct get (returns arrays now)
+      for (const identifier of identifierSet) {
+        const orders = this.get(taskId, marketplace, identifier);
+        if (orders) {
+          allOrders.push(...orders); // Flatten array
+        }
+      }
+    } else {
+      // All marketplaces - scan cache
+      for (const [, orders] of orderLRU.entries()) {
+        for (const order of orders) {
+          if (order.taskId === taskId && identifierSet.has(order.identifier)) {
+            if (!this.isExpired(order)) {
+              allOrders.push(order);
+            }
+          }
+        }
+      }
+    }
+
+    return allOrders;
+  }
+
+  /**
+   * Get offer price for an order (as number for arithmetic)
+   * Returns undefined if order not found
+   * IMPORTANT: Returns price of newest order
+   */
+  getOfferPrice(taskId: string, marketplace: string, identifier: string): number | undefined {
+    const order = this.getNewest(taskId, marketplace, identifier);
+    return order ? Number(order.offerPrice) : undefined;
+  }
+
+  /**
+   * Get orders by task with pagination
+   * Returns object with orders array and total count
+   * Marketplace filter can be single string or array of strings
+   */
+  getByTaskPaginated(
+    taskId: string,
+    options: { marketplace?: string | string[]; skip?: number; limit?: number }
+  ): { orders: CachedOrder[]; total: number } {
+    const { marketplace, skip = 0 } = options;
+    const limit = 'limit' in options ? options.limit : 100;
+
+    let allOrders: CachedOrder[];
+
+    if (marketplace) {
+      const marketplaces = Array.isArray(marketplace) ? marketplace : [marketplace];
+      allOrders = this.getActiveByTask(taskId).filter(order =>
+        marketplaces.some(m => order.marketplace.toLowerCase() === m.toLowerCase())
+      );
+    } else {
+      allOrders = this.getActiveByTask(taskId);
+    }
+
+    // Sort by createdAt DESC (newest first)
+    allOrders.sort((a, b) => b.createdAt - a.createdAt);
+
+    // If limit is undefined, return all orders (no slicing)
+    if (limit === undefined) {
+      return {
+        orders: allOrders,
+        total: allOrders.length
+      };
+    }
+
     return {
-      totalOrders: this.cache.size,
-      taskCount: this.taskIndex.size,
-      initializedTasks: this.initializedTasks.size
+      orders: allOrders.slice(skip, skip + limit),
+      total: allOrders.length
     };
   }
 
   /**
-   * Clear entire cache (for testing or server shutdown)
+   * Set multiple orders at once (batch operation)
    */
-  clear(): void {
-    this.cache.clear();
-    this.taskIndex.clear();
-    this.idIndex.clear();
-    this.initializedTasks.clear();
-
-    if (DEBUG) {
-      debugLog('Cache', `[OrderCache] CLEAR | cache cleared`);
+  setMany(orders: CachedOrder[]): void {
+    for (const order of orders) {
+      this.set(order);
     }
+  }
+
+  /**
+   * Get the internal orderLRU cache for debugging/monitoring
+   * @internal - For use by lru-cache-sampler.ts only
+   */
+  getOrderLRU(): LRUCache<string, CachedOrder[]> {
+    return orderLRU;
   }
 }
 
 export const orderCache = new OrderCache();
+export default orderCache;

@@ -1,9 +1,9 @@
-import { AlchemyProvider, Contract, parseEther, Wallet } from "ethers";
+import { JsonRpcProvider, Contract, parseEther, Wallet } from "ethers";
 import { approveNFT } from "../../functions/approve";
 import { IFee } from "../../types/listing.types";
 import { axiosInstance, limiter } from "../../init";
 import { config } from "dotenv";
-import { getCollectionDetails } from "../../functions/collection";
+import { getCachedCollectionDetails } from "../../utils/collection-cache";
 
 // const BLUE = '\x1b[34m';
 // const RESET = '\x1b[0m';
@@ -13,12 +13,18 @@ import { errorLog } from "../../utils/debug-file-logger";
 import { convertDurationForOpenSea } from "../../utils/duration";
 import { roundToNineDecimals } from "../../utils/decimal-precision";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
+import { mainProvider as provider } from '../../utils/provider';
 
 config()
 
 const divider = 10000;
 const openseaFee = Number(getOpenseaMarketplaceFee());
-const ALCHEMY_API_KEY = process.env.ALCHEMY_API_KEY
+
+// Ceiling division for BigInt - rounds UP to ensure fees are never under-calculated
+// Standard BigInt division truncates toward zero, which can result in 0 fees for small amounts
+function ceilDiv(numerator: bigint, denominator: bigint): bigint {
+  return (numerator + denominator - 1n) / denominator;
+}
 const API_KEY = process.env.API_KEY;
 const types = {
   OrderComponents: [
@@ -116,7 +122,6 @@ const types = {
     }
   ]
 };
-const provider = new AlchemyProvider(NETWORK, ALCHEMY_API_KEY)
 
 /**
  * Lists an NFT on OpenSea marketplace
@@ -156,7 +161,7 @@ export const listOnOpensea = async (
   
   try {
     // console.log(`${BLUE}[OPENSEA] Fetching collection details for ${contractSlug}...${RESET}`);
-    const collectionData = await getCollectionDetails(contractSlug, nftAddress);
+    const collectionData = await getCachedCollectionDetails(contractSlug, nftAddress);
     creatorFees = collectionData?.creator_fees as IFee;
     enforceCreatorFee = collectionData?.enforceCreatorFee as boolean;
     // console.log(`${BLUE}[OPENSEA] Collection details fetched - Enforce creator fee: ${enforceCreatorFee}${RESET}`);
@@ -251,8 +256,8 @@ export const listOnOpensea = async (
           itemType: 0,
           token: "0x0000000000000000000000000000000000000000",
           identifierOrCriteria: 0,
-          startAmount: ((offerPrice * BigInt(fee)) / BigInt(divider)).toString(),
-          endAmount: ((offerPrice * BigInt(fee)) / BigInt(divider)).toString(),
+          startAmount: ceilDiv(offerPrice * BigInt(fee), BigInt(divider)).toString(),
+          endAmount: ceilDiv(offerPrice * BigInt(fee), BigInt(divider)).toString(),
           recipient: address
         };
         creatorFeeConsideration.push(consideration_item);
@@ -279,8 +284,8 @@ export const listOnOpensea = async (
     itemType: 0,
     token: "0x0000000000000000000000000000000000000000",
     identifierOrCriteria: 0,
-    startAmount: ((offerPrice * BigInt(openseaFee)) / BigInt(divider)).toString(),
-    endAmount: ((offerPrice * BigInt(openseaFee)) / BigInt(divider)).toString(),
+    startAmount: ceilDiv(offerPrice * BigInt(openseaFee), BigInt(divider)).toString(),
+    endAmount: ceilDiv(offerPrice * BigInt(openseaFee), BigInt(divider)).toString(),
     recipient: '0x0000a26b00c1f0df003000390027140000faa719'
   };
 

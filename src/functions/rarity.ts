@@ -2,18 +2,12 @@ import { limiter, axiosInstance } from "../init";
 import { API_KEY } from "..";
 import { BASE_URL } from "../constants";
 import { CollectionItemsListQuery } from "../queries";
-import RarityCache from "../models/rarityCache.model";
-import { DistributedLockManager } from "../utils/lock";
-import redisClient from '../utils/redis';
+import { rarityCache } from "../utils/rarity-cache";
 import { errorLog } from '../utils/debug-file-logger';
 import { apiDedup } from '../utils/api-dedup';
 
-const getRedis = () => redisClient.getClient();
-
-const lockManager = new DistributedLockManager({
-  lockPrefix: 'rarity:fetch:',
-  defaultTTLSeconds: 300 // 5 minutes
-});
+// In-flight rarity fetch tracking (Phase 4 migration - replaces distributed lock)
+const rarityFetchInFlight = new Map<string, Promise<any>>();
 
 interface GraphQLItem {
   id: string;
@@ -133,127 +127,80 @@ async function fetchRarityTokensRecursive(
 }
 
 /**
- * Fetch rarity tokens with Redis caching, distributed lock, and MongoDB persistence
+ * Fetch rarity tokens with Redis caching and distributed lock
  */
 export async function fetchRarityTokens(
   collectionSlug: string,
-  contractAddress: string,
   rarityCategory: "LEGENDARY" | "EPIC" | "RARE"
 ): Promise<RarityFetchResult> {
   const normalizedSlug = collectionSlug.toLowerCase();
-
-  // Redis cache configuration
-  const CACHE_TTL = 3600; // 1 hour
-  const cacheKey = `rarity:${normalizedSlug}:${rarityCategory}`;
   const lockKey = `rarity:lock:${normalizedSlug}:${rarityCategory}`;
 
   try {
-    // 1. Try Redis cache first (fastest)
-    if (getRedis()) {
-      const cachedData = await getRedis().get(cacheKey);
-      if (cachedData) {
-        const parsed = JSON.parse(cachedData);
-        if (parsed.totalCount > 0) {
-          return {
-            ...parsed,
-            cached: true,
-          };
-        }
-      }
-    }
-
-    // 2. Try MongoDB cache (persistent)
-    const mongoCache = await RarityCache.findOne({
-      collectionSlug: normalizedSlug,
-      rarityCategory,
-    });
-
-    if (mongoCache && mongoCache.totalCount > 0) {
-      // Update Redis cache for next time
-      if (getRedis()) {
-        await getRedis().set(
-          cacheKey,
-          JSON.stringify({
-            tokenIds: mongoCache.tokenIds,
-            totalCount: mongoCache.totalCount,
-            lastUpdated: mongoCache.lastUpdated,
-          }),
-          "EX",
-          CACHE_TTL
-        );
-      }
-
+    // 1. Try Redis cache first
+    const cached = await rarityCache.getRarityTokens(normalizedSlug, rarityCategory);
+    if (cached && cached.totalCount > 0) {
       return {
-        tokenIds: mongoCache.tokenIds,
-        totalCount: mongoCache.totalCount,
+        tokenIds: cached.tokenIds.map(id => parseInt(id, 10)),
+        totalCount: cached.totalCount,
         cached: true,
-        lastUpdated: mongoCache.lastUpdated,
+        lastUpdated: new Date(cached.lastUpdated),
       };
     }
 
-    // 3. Cache miss - fetch from OpenSea with distributed lock
-    const result = await lockManager.withLock(
-      lockKey,
-      async () => {
-        // Double-check cache after acquiring lock
-        if (getRedis()) {
-          const cachedData = await getRedis().get(cacheKey);
-          if (cachedData) {
-            const parsed = JSON.parse(cachedData);
-            if (parsed.totalCount > 0) {
-              return parsed;
-            }
+    // 2. Cache miss - fetch from OpenSea with in-flight Map deduplication (Phase 4 migration)
+    let inFlightPromise = rarityFetchInFlight.get(lockKey);
+
+    if (!inFlightPromise) {
+      // Create new fetch operation
+      inFlightPromise = (async () => {
+        try {
+          // Double-check cache after starting fetch
+          const cachedAfterStart = await rarityCache.getRarityTokens(normalizedSlug, rarityCategory);
+          if (cachedAfterStart && cachedAfterStart.totalCount > 0) {
+            return {
+              tokenIds: cachedAfterStart.tokenIds.map(id => parseInt(id, 10)),
+              totalCount: cachedAfterStart.totalCount,
+              lastUpdated: new Date(cachedAfterStart.lastUpdated),
+            };
           }
-        }
 
-        // Fetch from OpenSea API
-        const tokenIds = await fetchRarityTokensRecursive(
-          normalizedSlug,
-          rarityCategory
-        );
+          // Fetch from OpenSea API
+          const tokenIds = await fetchRarityTokensRecursive(
+            normalizedSlug,
+            rarityCategory
+          );
 
-        // Store in MongoDB
-        const cacheEntry = await RarityCache.findOneAndUpdate(
-          {
-            collectionSlug: normalizedSlug,
+          const now = new Date();
+
+          // Store in cache (convert numbers to strings for storage)
+          await rarityCache.setRarityTokens(
+            normalizedSlug,
             rarityCategory,
-          },
-          {
-            collectionSlug: normalizedSlug,
-            contractAddress: contractAddress || "",
-            rarityCategory,
+            tokenIds.map(id => id.toString())
+          );
+
+          return {
             tokenIds,
             totalCount: tokenIds.length,
-            lastUpdated: new Date(),
-          },
-          { upsert: true, new: true }
-        );
+            lastUpdated: now,
+          };
+        } finally {
+          // Remove from in-flight tracking
+          rarityFetchInFlight.delete(lockKey);
+        }
+      })();
 
-        return {
-          tokenIds: cacheEntry.tokenIds,
-          totalCount: cacheEntry.totalCount,
-          lastUpdated: cacheEntry.lastUpdated,
-        };
-      },
-      300000 // 5 minute lock timeout
-    );
-
-    // Cache in Redis
-    if (getRedis() && result.totalCount > 0) {
-      await getRedis().set(
-        cacheKey,
-        JSON.stringify({
-          tokenIds: result.tokenIds,
-          totalCount: result.totalCount,
-          lastUpdated: result.lastUpdated,
-        }),
-        "EX",
-        CACHE_TTL
-      );
+      rarityFetchInFlight.set(lockKey, inFlightPromise);
     }
 
+    // Wait for fetch to complete (either new or in-progress)
+    const result = await inFlightPromise;
+
     return {
-      ...result,
+      tokenIds: result.tokenIds,
+      totalCount: result.totalCount,
+      lastUpdated: result.lastUpdated,
       cached: false,
     };
   } catch (error) {

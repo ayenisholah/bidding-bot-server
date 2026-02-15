@@ -29,13 +29,16 @@ export class BlurRateLimiter extends EventEmitter {
   private readonly DEFAULT_LIMIT = 40; // Blur's actual limit
   private readonly DEFAULT_WINDOW = 10000; // 10 seconds
   private readonly SAFETY_THRESHOLD = 0.8; // Use 80% of rate limit for safety buffer
-  
+  private readonly CLEANUP_INTERVAL = 15 * 60 * 1000; // 15 minutes
+  private cleanupInterval: NodeJS.Timeout | null = null;
+
 
   constructor() {
     super();
     this.walletLimits = new Map();
     this.walletErrors = new Map();
     this.pendingRequests = new Map();
+    this.startCleanup();
   }
 
   private createWalletLimit(): WalletRateLimit {
@@ -408,6 +411,27 @@ export class BlurRateLimiter extends EventEmitter {
       totalWallets: this.walletErrors.size,
       wallets: stats.sort((a, b) => b.errorRate - a.errorRate) // Sort by error rate descending
     };
+  }
+
+  /**
+   * Start periodic cleanup (called automatically in constructor)
+   */
+  private startCleanup(): void {
+    if (this.cleanupInterval) return;
+
+    this.cleanupInterval = setInterval(() => {
+      this.cleanupOldEntries();
+    }, this.CLEANUP_INTERVAL);
+  }
+
+  /**
+   * Destroy cleanup interval (for graceful shutdown)
+   */
+  destroy(): void {
+    if (this.cleanupInterval) {
+      clearInterval(this.cleanupInterval);
+      this.cleanupInterval = null;
+    }
   }
 }
 
