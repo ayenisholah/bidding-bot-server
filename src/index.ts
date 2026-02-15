@@ -8095,7 +8095,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
 
       if (approved) {
         // Update cache with successful approval
-        await approvalCache.setApproval(wallet.address, marketplaceAddress, WETH, {
+        await approvalCache.setApproval(wallet.address, marketplaceAddress, WETH, task.chain, {
           approved: true,
           timestamp: Date.now(),
           allowance: MaxUint256.toString()

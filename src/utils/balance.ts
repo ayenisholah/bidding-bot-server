@@ -1,282 +1,168 @@
-import { formatEther, Contract } from "ethers";
-import { DistributedLockManager } from "./lock";
-import redisClient from "./redis";
-import { RED, RESET } from "..";
-import { logger, ErrorCategory } from "./logger";
-import { ChainValue, DEFAULT_CHAIN, getProviderForChain, normalizeChainValue } from "./chains";
-import { debugLog } from "./debug-file-logger";
+import { API_KEY } from "..";
+import { limiter, axiosInstance } from "../init";
+import { BASE_URL } from "../constants";
+import { errorLog } from "./debug-file-logger";
+import { apiDedup } from "./api-dedup";
+import { ChainValue, DEFAULT_CHAIN } from "./chains";
+import {
+  balanceLRU,
+  trackBalanceHit,
+  trackBalanceMiss
+} from "../marketplace/opensea/cache";
 
-const getRedis = () => redisClient.getClient()
+const WETH_ADDRESS = "0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2".toLowerCase();
 
-export async function fetchERC20Balance(walletAddress: string, tokenAddress: string, chain: ChainValue = DEFAULT_CHAIN): Promise<number> {
-  const CACHE_EXPIRY_SECONDS = 60;
-  const STALE_CACHE_EXPIRY_SECONDS = 3600; // Keep stale cache for 1 hour as fallback
-  const resolvedChain = normalizeChainValue(chain);
-  const cacheKey = `{erc20_balance:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
-  const staleCacheKey = `{erc20_balance_stale:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
+// In-flight balance fetch tracking (Phase 4 migration - replaces distributed locks)
+const balanceFetchInFlight = new Map<string, Promise<number>>();
 
-  // Try to get fresh cached balance first
-  try {
-    const redis = getRedis();
-    if (redis) {
-      const cachedBalance = await redis.get(cacheKey);
-      if (cachedBalance) {
-        return Number(cachedBalance);
-      }
-    }
-  } catch (error) {
-    console.warn('Redis not available for cache lookup:', error);
-  }
-
-  const lockManager = new DistributedLockManager({
-    lockPrefix: 'erc20_balance:lock:',
-    defaultTTLSeconds: CACHE_EXPIRY_SECONDS
-  });
-
-  const lockKey = `{erc20_${walletAddress}:${resolvedChain}}_${tokenAddress}`;
-
-  try {
-    const result = await lockManager.withLock(
-      lockKey,
-      async () => {
-        try {
-          const redis = getRedis();
-          if (redis) {
-            const cachedBalanceAfterLock = await redis.get(cacheKey);
-            if (cachedBalanceAfterLock) {
-              return Number(cachedBalanceAfterLock);
-            }
-          }
-        } catch (error) {
-          console.warn('Redis not available for cache lookup after lock:', error);
-        }
-
-        try {
-          const provider = getProviderForChain(resolvedChain);
-
-          const tokenContract = new Contract(
-            tokenAddress,
-            ['function balanceOf(address) view returns (uint256)'],
-            provider
-          );
-          const maxRetries = 3;
-          let lastError;
-
-          for (let attempt = 0; attempt <= maxRetries; attempt++) {
-            try {
-              const balance = await tokenContract.balanceOf(walletAddress);
-              const formattedBalance = Number(formatEther(balance));
-
-              // Store in both fresh and stale cache
-              try {
-                const redis = getRedis();
-                if (redis) {
-                  await redis.set(cacheKey, formattedBalance.toString(), 'EX', CACHE_EXPIRY_SECONDS);
-                  await redis.set(staleCacheKey, formattedBalance.toString(), 'EX', STALE_CACHE_EXPIRY_SECONDS);
-                }
-              } catch (error) {
-                console.warn('Failed to cache balance:', error);
-              }
-
-              return formattedBalance;
-            } catch (error: any) {
-              lastError = error;
-
-              // Check if it's a network error
-              if (error.code === 'NETWORK_ERROR' || error.message?.includes('could not detect network')) {
-                console.warn(`Network error for ${walletAddress}/${tokenAddress}, attempt ${attempt + 1}/${maxRetries + 1}`);
-              }
-
-              if (attempt < maxRetries) {
-                const backoffTime = Math.pow(2, attempt) * 1000;
-                await new Promise(resolve => setTimeout(resolve, backoffTime));
-              }
-            }
-          }
-
-          throw lastError;
-        } catch (error) {
-          await logger.logBlockchainError(`Error fetching ERC20 balance for token ${tokenAddress}`, {
-            walletAddress,
-            tokenAddress,
-            operation: 'fetch_erc20_balance',
-            error: error as Error,
-            errorMessage: error instanceof Error ? error.message : String(error)
-          });
-          console.error(RED + `Error fetching ERC20 balance for token ${tokenAddress}:` + RESET, error);
-          throw error;
-        }
-      }
-    );
-
-    return result || 0;
-  } catch (error: any) {
-    // If we get a network error or lock error, try to use stale cache
-    console.warn(`Failed to fetch fresh balance for ${walletAddress}/${tokenAddress}, checking stale cache...`, error.message || error);
-
-    let staleBalance = null;
-    try {
-      const redis = getRedis();
-      if (redis) {
-        staleBalance = await redis.get(staleCacheKey);
-      }
-    } catch (error) {
-      console.warn('Failed to get stale cache:', error);
-    }
-    if (staleBalance) {
-      return Number(staleBalance);
-    }
-
-    // If no stale cache available, log error and return 0
-    await logger.logWarning(ErrorCategory.BLOCKCHAIN, `No cached balance available for ${walletAddress}/${tokenAddress}`, {
-      walletAddress,
-      tokenAddress,
-      operation: 'fetch_erc20_balance_fallback'
-    });
-    console.error(RED + `No cached balance available for ${walletAddress}/${tokenAddress}` + RESET);
-    return 0;
-  }
+interface BalanceResponse {
+  data: {
+    addressBalances: Array<{
+      currency: {
+        contractAddress: string;
+        chain: {
+          identifier: string;
+        };
+      };
+      quantity: string;
+    }>;
+  };
 }
 
-export async function fetchERC20BalanceFresh(walletAddress: string, tokenAddress: string, chain: ChainValue = DEFAULT_CHAIN): Promise<number> {
-  const CACHE_EXPIRY_SECONDS = 60;
-  const STALE_CACHE_EXPIRY_SECONDS = 3600; // Keep stale cache for 1 hour as fallback
-  const resolvedChain = normalizeChainValue(chain);
-  const cacheKey = `{erc20_balance:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
-  const staleCacheKey = `{erc20_balance_stale:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
-  const startTime = Date.now();
-
-  // First try to get cached value
-  try {
-    const redis = getRedis();
-    if (redis) {
-      const cachedBalance = await redis.get(cacheKey);
-      if (cachedBalance) {
-        return Number(cachedBalance);
-      }
-    }
-  } catch (error) {
-    console.warn('[fetchERC20BalanceFresh] Redis error when checking cache:', error);
-  }
-
-  // Create promise with timeout
-  const timeoutPromise = new Promise<number>((_, reject) => {
-    setTimeout(() => reject(new Error('Balance fetch timeout after 5 seconds')), 5000);
-  });
-
-  const fetchPromise = async (): Promise<number> => {
-    const lockManager = new DistributedLockManager({
-      lockPrefix: 'erc20_balance:lock:',
-      defaultTTLSeconds: CACHE_EXPIRY_SECONDS
-    });
-
-    const lockKey = `{erc20_${walletAddress}:${resolvedChain}}_${tokenAddress}`;
-
-    try {
-      const result = await lockManager.withLock(
-        lockKey,
-        async () => {
-          try {
-            const provider = getProviderForChain(resolvedChain);
-
-            const tokenContract = new Contract(
-              tokenAddress,
-              ['function balanceOf(address) view returns (uint256)'],
-              provider
-            );
-            const maxRetries = 3;
-            let lastError;
-
-            for (let attempt = 0; attempt <= maxRetries; attempt++) {
-              try {
-                const balance = await tokenContract.balanceOf(walletAddress);
-                const formattedBalance = Number(formatEther(balance));
-
-                // Store in both fresh and stale cache
-                try {
-                  const redis = getRedis();
-                  if (redis) {
-                    await redis.set(cacheKey, formattedBalance.toString(), 'EX', CACHE_EXPIRY_SECONDS);
-                    await redis.set(staleCacheKey, formattedBalance.toString(), 'EX', STALE_CACHE_EXPIRY_SECONDS);
-                  }
-                } catch (error) {
-                  console.warn('Failed to cache balance:', error);
-                }
-
-                return formattedBalance;
-              } catch (error: any) {
-                lastError = error;
-
-                // Check if it's a network error
-                if (error.code === 'NETWORK_ERROR' || error.message?.includes('could not detect network')) {
-                  console.warn(`Network error for ${walletAddress}/${tokenAddress}, attempt ${attempt + 1}/${maxRetries + 1}`);
-                }
-
-                if (attempt < maxRetries) {
-                  const backoffTime = Math.pow(2, attempt) * 1000;
-                  await new Promise(resolve => setTimeout(resolve, backoffTime));
-                }
-              }
-            }
-
-            throw lastError;
-          } catch (error) {
-            console.error(RED + `Error fetching fresh ERC20 balance for token ${tokenAddress}:` + RESET, error);
-            throw error;
+/**
+ * Fetch WETH balance using OpenSea's GraphQL API through Kong proxy.
+ * @returns WETH balance in ETH (e.g., 0.5 for 0.5 WETH)
+ */
+async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
+  const query = {
+    operationName: "WethBalanceQuery",
+    query: `query WethBalanceQuery($address: Address!) {
+      addressBalances(address: $address) {
+        currency {
+          contractAddress
+          chain {
+            identifier
           }
         }
-      );
-
-      return result || 0;
-    } catch (error: any) {
-      console.error(RED + `Lock/fetch error for ${walletAddress}/${tokenAddress}: ${error.message}` + RESET);
-      throw error;
-    }
+        quantity
+      }
+    }`,
+    variables: { address: walletAddress }
   };
 
   try {
-    // Race between fetch and timeout
-    const balance = await Promise.race([fetchPromise(), timeoutPromise]);
-    return balance;
-  } catch {
-    const elapsed = Date.now() - startTime;
-    console.warn(`[fetchERC20BalanceFresh] Failed to fetch fresh balance after ${elapsed}ms, checking stale cache...`);
+    const { data } = await apiDedup(
+      `opensea-weth-balance-${walletAddress.toLowerCase()}`,
+      () => limiter.schedule({ priority: 0 }, () =>
+        axiosInstance.post<BalanceResponse>(
+          `${BASE_URL}/opensea/graphql`,
+          query,
+          {
+            headers: {
+              'content-type': 'application/json',
+              'x-api-key': API_KEY
+            }
+          }
+        )
+      ),
+      { category: 'Balance' }
+    );
 
-    // Try stale cache
-    try {
-      const redis = getRedis();
-      if (redis) {
-        const staleBalance = await redis.get(staleCacheKey);
-        if (staleBalance) {
-          return Number(staleBalance);
-        }
-      }
-    } catch (cacheError) {
-      console.warn('[fetchERC20BalanceFresh] Failed to get stale cache:', cacheError);
-    }
+    const wethBalance = data.data.addressBalances.find(
+      (bal) =>
+        bal.currency.contractAddress.toLowerCase() === WETH_ADDRESS &&
+        bal.currency.chain.identifier === "ethereum"
+    );
 
-    // Return 0 as final fallback
-    console.warn(`[fetchERC20BalanceFresh] No cached balance available, returning 0.00`);
-    return 0;
+    // Quantity is already in ETH, not wei
+    return wethBalance ? Number(wethBalance.quantity) : 0;
+
+  } catch (error) {
+    errorLog('Balance',
+      `Error fetching WETH balance via GraphQL | wallet=${walletAddress.slice(0, 10)}...`,
+      error
+    );
+    throw error;
   }
 }
 
 /**
- * Invalidate balance cache for a specific wallet/token combination
+ * Invalidate the balance cache for a specific wallet/token combination.
+ * Called when we receive a balance error from marketplace APIs to ensure
+ * the next balance check fetches fresh data.
  */
-export async function invalidateBalanceCache(walletAddress: string, tokenAddress: string, chain: ChainValue = DEFAULT_CHAIN): Promise<void> {
-  const resolvedChain = normalizeChainValue(chain);
-  const cacheKey = `{erc20_balance:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
-  const staleCacheKey = `{erc20_balance_stale:${walletAddress}:${resolvedChain}}:${tokenAddress}`;
+export async function invalidateBalanceCache(walletAddress: string): Promise<void> {
+  const normalizedAddress = walletAddress.toLowerCase();
 
   try {
-    const redis = getRedis();
-    if (redis) {
-      await redis.del(cacheKey);
-      await redis.del(staleCacheKey);
-      debugLog('Balance', `Invalidated cache | wallet=${walletAddress.slice(0, 10)}... | token=${tokenAddress.slice(0, 10)}... | chain=${resolvedChain}`);
-    }
+    balanceLRU.delete(normalizedAddress);
   } catch (error) {
-    console.warn('Failed to invalidate balance cache:', error);
+    errorLog('Balance', `Failed to invalidate cache | wallet=${walletAddress.slice(0, 10)}...`, error);
+  }
+}
+
+// TODO: This function currently uses Kong/OpenSea GraphQL which only supports Ethereum mainnet.
+// For true multichain support, migrate to Alchemy RPC like the multi-chain branch had.
+export async function fetchERC20Balance(walletAddress: string, _tokenAddress: string, _chain: ChainValue = DEFAULT_CHAIN): Promise<number> {
+  // NOTE: chain parameter currently ignored - Kong/OpenSea is Ethereum-only
+  const normalizedAddress = walletAddress.toLowerCase();
+
+  // Check LRU cache (< 1ms)
+  const lruCached = balanceLRU.get(normalizedAddress);
+  if (lruCached !== undefined) {
+    trackBalanceHit();
+    return lruCached;
+  }
+
+  // Cache miss - fetch from GraphQL
+  trackBalanceMiss();
+
+  // Use in-flight Map to prevent duplicate concurrent fetches
+  let inFlightPromise = balanceFetchInFlight.get(normalizedAddress);
+
+  if (!inFlightPromise) {
+    // Create new fetch operation
+    inFlightPromise = (async () => {
+      try {
+        // Double-check LRU after starting fetch
+        const lruCachedAfterStart = balanceLRU.get(normalizedAddress);
+        if (lruCachedAfterStart !== undefined) {
+          return lruCachedAfterStart;
+        }
+
+        // Fetch balance via GraphQL
+        const balance = await fetchWethBalanceGraphQL(walletAddress);
+
+        // Cache the result
+        balanceLRU.set(normalizedAddress, balance);
+
+        return balance;
+
+      } catch (error) {
+        errorLog('Balance',
+          `Error fetching WETH balance via GraphQL | wallet=${walletAddress.slice(0, 10)}...`,
+          error
+        );
+        throw error;
+      } finally {
+        // Remove from in-flight tracking
+        balanceFetchInFlight.delete(normalizedAddress);
+      }
+    })();
+
+    balanceFetchInFlight.set(normalizedAddress, inFlightPromise);
+  }
+
+  try {
+    // Wait for fetch to complete (either new or in-progress)
+    const result = await inFlightPromise;
+    return result || 0;
+  } catch (error) {
+    // If we get a network error and no cache, return 0
+    errorLog('Balance',
+      `Failed to fetch WETH balance (no cached fallback) | wallet=${walletAddress.slice(0, 10)}...`,
+      error
+    );
+    return 0;
   }
 }
