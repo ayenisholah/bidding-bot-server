@@ -17410,7 +17410,7 @@ async function processOpenseaTraitBid(data: IProcessOpenseaTraitBidData) {
     // === BALANCE PRE-CHECK ===
     const { checkBalanceBeforeBid } = await import('./utils/balance-helpers');
     const balanceCheck = await checkBalanceBeforeBid(
-      _id, wallet.address, offerPriceEth, currency, currencySymbol, slug, 'opensea'
+      _id, wallet.address, offerPriceEth, currency, currencySymbol, slug, 'opensea', currentTask.chain || 'ethereum'
     );
 
     if (!balanceCheck.sufficient) {
@@ -17757,7 +17757,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
     // === BALANCE PRE-CHECK ===
     const { checkBalanceBeforeBid } = await import('./utils/balance-helpers');
     const balanceCheck = await checkBalanceBeforeBid(
-      _id, wallet.address, offerPriceEth, currency, currencySymbol, slug, 'opensea'
+      _id, wallet.address, offerPriceEth, currency, currencySymbol, slug, 'opensea', currentTask.chain || 'ethereum'
     );
 
     if (!balanceCheck.sufficient) {
@@ -18668,7 +18668,7 @@ async function openseaTokenCounterBid(job: Job<IProcessOpenseaTokenBidData>) {
     // === BALANCE PRE-CHECK ===
     const { checkBalanceBeforeBid } = await import('./utils/balance-helpers');
     const balanceCheck = await checkBalanceBeforeBid(
-      taskId, wallet.address, offerPriceEth, currency, currencySymbol, slug, 'opensea'
+      taskId, wallet.address, offerPriceEth, currency, currencySymbol, slug, 'opensea', currentTask.chain || 'ethereum'
     );
 
     if (!balanceCheck.sufficient) {

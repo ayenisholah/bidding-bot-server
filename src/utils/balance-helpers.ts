@@ -201,7 +201,7 @@ export function getLoggedBalanceErrors(): LRUCache<string, boolean> {
 
 /**
  * Check wallet balance before placing bid to avoid wasted API calls.
- * Uses cached balance (60s TTL) for fast pre-check.
+ * Uses cached balance (60s TTL) for fast pre-check with chain-aware balance fetching.
  *
  * @param taskId - Task ID for logging
  * @param walletAddress - Wallet address to check
@@ -210,6 +210,7 @@ export function getLoggedBalanceErrors(): LRUCache<string, boolean> {
  * @param currencySymbol - Currency symbol (WETH, BETH, etc)
  * @param slug - Collection slug for logging
  * @param marketplace - Marketplace name for logging
+ * @param chain - Chain to check balance on (ethereum, base, megaeth, abstract, etc.)
  * @returns Object with sufficient boolean and actual balance
  */
 export async function checkBalanceBeforeBid(
@@ -219,17 +220,18 @@ export async function checkBalanceBeforeBid(
   currency: string,
   currencySymbol: string,
   slug: string,
-  marketplace: 'opensea' | 'magiceden' | 'blur'
+  marketplace: 'opensea' | 'magiceden' | 'blur',
+  chain: string
 ): Promise<{ sufficient: boolean; balance: number }> {
   const { fetchERC20Balance } = await import('./balance');
-  const balance = await fetchERC20Balance(walletAddress, currency);
+  const balance = await fetchERC20Balance(walletAddress, currency, chain as any);
 
   const sufficient = balance >= requiredAmountEth;
 
   if (!sufficient) {
     warnLog('BidFlow',
-      `[Balance Pre-Check] Insufficient ${currencySymbol} | taskId=${taskId} | collection=${slug} | required=${requiredAmountEth} | available=${balance}`,
-      { taskId, marketplace, slug, required: requiredAmountEth, available: balance }
+      `[Balance Pre-Check] Insufficient ${currencySymbol} | taskId=${taskId} | collection=${slug} | chain=${chain} | required=${requiredAmountEth} | available=${balance}`,
+      { taskId, marketplace, slug, chain, required: requiredAmountEth, available: balance }
     );
   }
 
