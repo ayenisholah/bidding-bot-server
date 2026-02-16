@@ -299,18 +299,20 @@ function createProvider(config: ChainConfig): ethers.JsonRpcProvider {
 
   if (config.provider.alchemyNetwork) {
     const apiKey = process.env.ALCHEMY_API_KEY;
-    try {
-      return new ethers.AlchemyProvider(config.provider.alchemyNetwork, apiKey);
-    } catch (error) {
-      const fallbackUrl = resolveAlchemyRpcUrl(config.provider.alchemyNetwork, apiKey);
-      if (fallbackUrl) {
-        return new ethers.JsonRpcProvider(fallbackUrl, config.provider.chainId);
-      }
-      throw error;
+    const rpcUrl = resolveAlchemyRpcUrl(config.provider.alchemyNetwork, apiKey);
+    if (rpcUrl) {
+      return new ethers.JsonRpcProvider(rpcUrl, config.provider.chainId);
     }
+    throw new Error(`Failed to resolve RPC URL for Alchemy network: ${config.provider.alchemyNetwork}`);
   }
 
-  return new ethers.AlchemyProvider("mainnet", process.env.ALCHEMY_API_KEY);
+  // Default to Ethereum mainnet using g.alchemy.com
+  const apiKey = process.env.ALCHEMY_API_KEY;
+  const rpcUrl = resolveAlchemyRpcUrl("mainnet", apiKey);
+  if (rpcUrl) {
+    return new ethers.JsonRpcProvider(rpcUrl, 1);
+  }
+  throw new Error('Failed to create default Ethereum provider');
 }
 
 export function getProviderForChain(chain?: ChainValue | null): ethers.JsonRpcProvider {

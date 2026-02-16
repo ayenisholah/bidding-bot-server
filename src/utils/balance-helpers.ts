@@ -6,6 +6,7 @@
 import { LRUCache } from 'lru-cache';
 import { addIfNotExists } from './lru-helpers';
 import { warnLog } from "./debug-file-logger";
+import { getCurrencyAddress } from './chains';
 
 // Track logged balance errors to prevent flooding (1k items, 30 min TTL)
 const loggedBalanceErrors = new LRUCache<string, boolean>({
@@ -217,14 +218,27 @@ export async function checkBalanceBeforeBid(
   taskId: string,
   walletAddress: string,
   requiredAmountEth: number,
-  currency: string,
-  currencySymbol: string,
+  currency: string,  // Legacy parameter (might be wrong for non-Ethereum chains)
+  currencySymbol: string,  // Use this to resolve correct address
   slug: string,
   marketplace: 'opensea' | 'magiceden' | 'blur',
   chain: string
 ): Promise<{ sufficient: boolean; balance: number }> {
   const { fetchERC20Balance } = await import('./balance');
-  const balance = await fetchERC20Balance(walletAddress, currency, chain as any);
+
+  // Resolve correct token address for the chain
+  // Don't trust the 'currency' parameter - it might be Ethereum-specific
+  const tokenAddress = getCurrencyAddress(chain as any, currencySymbol);
+
+  if (!tokenAddress) {
+    warnLog('BidFlow',
+      `[Balance Pre-Check] No token address found for ${currencySymbol} on chain ${chain}`,
+      { taskId, marketplace, slug, chain, currencySymbol }
+    );
+    return { sufficient: false, balance: 0 };
+  }
+
+  const balance = await fetchERC20Balance(walletAddress, tokenAddress, chain as any);
 
   const sufficient = balance >= requiredAmountEth;
 
