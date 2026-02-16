@@ -1,8 +1,8 @@
-name: Docker Build and Push (Beta Single)
+name: Docker Build and Push (Local Websocket)
 
 on:
   push:
-    branches: ["beta-redis-single"]
+    branches: ["local-websocket"]
 
 jobs:
   build:
@@ -22,4 +22,4 @@ jobs:
           password: ${{ secrets.DOCKER_PASSWORD }}
 
       - name: Build and push Docker image
-        run: npm run dc:build:beta-single
+        run: npm run dc:build:local-websocket
