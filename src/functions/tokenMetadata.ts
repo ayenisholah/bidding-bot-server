@@ -143,7 +143,6 @@ export async function fetchTokenMetadata(
       { category: 'Metadata' }
     );
 
-    warnLog('OpenSea', `[getTokenTraitsByIdentifier] RAW_RESPONSE | contract=${contractAddress} | token=${tokenId} | ${JSON.stringify(response.data).substring(0, 1500)}`);
     if (!response.data?.data?.itemByIdentifier) {
       return null;
     }
@@ -220,7 +219,6 @@ export async function getTraitFloorPrice(
       { category: 'Metadata' }
     );
 
-    warnLog('OpenSea', `[getTraitFloorPrice] RAW_RESPONSE | slug=${collectionSlug} | trait=${traitType}:${traitValue} | ${JSON.stringify(response.data).substring(0, 1500)}`);
     const edges = response.data?.data?.collections?.edges;
     if (!edges || edges.length === 0) {
       return null;
@@ -297,7 +295,6 @@ export async function getTraitFilteredListings(
       { category: 'Metadata' }
     );
 
-    warnLog('OpenSea', `[getTraitFilteredListings] RAW_RESPONSE | slug=${collectionSlug} | trait=${traitType}:${traitValue} | ${JSON.stringify(response.data).substring(0, 1500)}`);
     const edges = response.data?.data?.collections?.edges;
     if (!edges || edges.length === 0) {
       return [];

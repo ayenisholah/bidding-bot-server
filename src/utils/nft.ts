@@ -204,7 +204,6 @@ async function fetchNFTsFromOpenSea({ wallet, walletId }: { wallet: string; wall
         { category: 'OpenSea' }
       );
 
-      warnLog('OpenSea', `[getProfileNFTs] RAW_RESPONSE | wallet=${wallet.slice(0, 10)}... | cursor=${cursor || 'initial'} | ${JSON.stringify(data).substring(0, 1500)}`);
       if (data?.data?.profileItems?.items) {
         for (const item of data.data.profileItems.items) {
           // Filter for ERC721 tokens on Ethereum chain only

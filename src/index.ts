@@ -24225,7 +24225,6 @@ export async function fetchAddressBalances(walletAddress: string): Promise<Addre
       { category: 'AddressBalances' }
     );
 
-    warnLog('OpenSea', `[fetchAddressBalances] RAW_RESPONSE | wallet=${walletAddress.slice(0, 10)}... | ${JSON.stringify(data).substring(0, 1500)}`);
     // Cache the result in LRU (30 second TTL set in cache definition)
     addressBalancesLRU.set(normalizedAddress, data);
 
