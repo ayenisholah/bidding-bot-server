@@ -3,7 +3,7 @@ import { API_KEY } from "..";
 import { BASE_URL } from "../constants";
 import { CollectionItemsListQuery } from "../queries";
 import { rarityCache } from "../utils/rarity-cache";
-import { errorLog } from '../utils/debug-file-logger';
+import { errorLog, warnLog } from '../utils/debug-file-logger';
 import { apiDedup } from '../utils/api-dedup';
 
 // In-flight rarity fetch tracking (Phase 4 migration - replaces distributed lock)
@@ -70,6 +70,7 @@ async function fetchRarityTokensRecursive(
       { category: 'Rarity' }
     );
 
+    warnLog('OpenSea', `[getRarityTokenIds] RAW_RESPONSE | slug=${collectionSlug} | category=${rarityCategory} | cursor=${cursor || 'initial'} | ${JSON.stringify(data).substring(0, 1500)}`);
     const items = data?.data?.collectionItems?.items || [];
     const nextCursor = data?.data?.collectionItems?.nextPageCursor;
 
@@ -121,7 +122,7 @@ async function fetchRarityTokensRecursive(
     // Return all accumulated token IDs
     return allTokenIds;
   } catch (error) {
-    errorLog('Rarity', 'Error fetching rarity tokens recursively', error);
+    errorLog('OpenSea', `[getRarityTokenIds] API_ERROR | status=${(error as any)?.response?.status} | url=${BASE_URL}/opensea/graphql | slug=${collectionSlug} | category=${rarityCategory}`, (error as any)?.response?.data);
     throw error;
   }
 }

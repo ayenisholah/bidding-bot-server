@@ -87,14 +87,24 @@ services:
     container_name: "redis-cluster-init"
     command: >
       bash -c "
-        echo 'Waiting for Redis nodes to be ready...'
+        echo 'Waiting for Redis nodes...'
         sleep 10
-        redis-cli --cluster create
-          redis-node-1:7000
-          redis-node-2:7001
-          redis-node-3:7002
-          --cluster-yes
-        echo 'Redis Cluster initialized successfully!'
+        STATE=$$(redis-cli -h redis-node-1 -p 7000 cluster info | grep cluster_state | cut -d: -f2 | tr -d '[:space:]')
+        if [ \"$$STATE\" = 'ok' ]; then echo 'Cluster already healthy, skipping init.'; exit 0; fi
+        echo 'Resetting all Redis nodes (clears data and cluster state)...'
+        redis-cli -h redis-node-1 -p 7000 CLUSTER RESET HARD || echo 'Failed to reset redis-node-1'
+        redis-cli -h redis-node-2 -p 7001 CLUSTER RESET HARD || echo 'Failed to reset redis-node-2'
+        redis-cli -h redis-node-3 -p 7002 CLUSTER RESET HARD || echo 'Failed to reset redis-node-3'
+        echo 'All nodes reset. Creating cluster...'
+        sleep 2
+        redis-cli --cluster create redis-node-1:7000 redis-node-2:7001 redis-node-3:7002 --cluster-yes
+        echo 'Verifying cluster is ready...'
+        for i in $$(seq 1 30); do
+          STATE=$$(redis-cli -h redis-node-1 -p 7000 cluster info | grep cluster_state | cut -d: -f2 | tr -d '[:space:]')
+          if [ \"$$STATE\" = 'ok' ]; then echo 'Redis Cluster is ready and healthy!'; exit 0; fi
+          echo \"Waiting for cluster to stabilize... ($$i/30)\"; sleep 1
+        done
+        echo 'ERROR: Cluster failed to reach ready state after 30 seconds'; exit 1
       "
     depends_on:
       redis-node-1:
