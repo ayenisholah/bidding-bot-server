@@ -130,7 +130,6 @@ const LatencySnapshotSchema = new Schema<ILatencySnapshot>(
       type: Date,
       required: true,
       default: Date.now,
-      index: true, // Fast time-range queries
     },
 
     forwardingLatency: {

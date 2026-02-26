@@ -1180,6 +1180,7 @@ async function handleRedisFailure() {
 
 async function monitorHealth() {
   try {
+    if (!queue) return;
     const isRedisHealthy = await checkRedisHealth();
     if (!isRedisHealthy) {
       redisFailures++;
@@ -24224,12 +24225,13 @@ export async function fetchAddressBalances(walletAddress: string): Promise<Addre
       { category: 'AddressBalances' }
     );
 
+    warnLog('OpenSea', `[fetchAddressBalances] RAW_RESPONSE | wallet=${walletAddress.slice(0, 10)}... | ${JSON.stringify(data).substring(0, 1500)}`);
     // Cache the result in LRU (30 second TTL set in cache definition)
     addressBalancesLRU.set(normalizedAddress, data);
 
     return data;
   } catch (error) {
-    errorLog('AddressBalances', 'Error fetching address balances', error);
+    errorLog('OpenSea', `[fetchAddressBalances] API_ERROR | status=${(error as any)?.response?.status} | url=${BASE_URL}/opensea/graphql | wallet=${walletAddress.slice(0, 10)}...`, (error as any)?.response?.data);
     throw error;
   }
 }

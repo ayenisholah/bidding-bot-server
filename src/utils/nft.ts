@@ -204,6 +204,7 @@ async function fetchNFTsFromOpenSea({ wallet, walletId }: { wallet: string; wall
         { category: 'OpenSea' }
       );
 
+      warnLog('OpenSea', `[getProfileNFTs] RAW_RESPONSE | wallet=${wallet.slice(0, 10)}... | cursor=${cursor || 'initial'} | ${JSON.stringify(data).substring(0, 1500)}`);
       if (data?.data?.profileItems?.items) {
         for (const item of data.data.profileItems.items) {
           // Filter for ERC721 tokens on Ethereum chain only
@@ -315,7 +316,7 @@ async function fetchNFTsFromOpenSea({ wallet, walletId }: { wallet: string; wall
         break;
       }
     } catch (error) {
-      errorLog('API', `[NFT] Error fetching NFTs from OpenSea GraphQL | wallet=${wallet.slice(0, 10)}... | status=${(error as any)?.response?.status}`, error);
+      errorLog('OpenSea', `[getProfileNFTs] API_ERROR | status=${(error as any)?.response?.status} | url=${BASE_URL}/opensea/graphql | wallet=${wallet.slice(0, 10)}...`, (error as any)?.response?.data);
       throw error;
     }
   } while (cursor);

@@ -143,10 +143,8 @@ export async function fetchTokenMetadata(
       { category: 'Metadata' }
     );
 
+    warnLog('OpenSea', `[getTokenTraitsByIdentifier] RAW_RESPONSE | contract=${contractAddress} | token=${tokenId} | ${JSON.stringify(response.data).substring(0, 1500)}`);
     if (!response.data?.data?.itemByIdentifier) {
-      // DEBUG: Log why the API returned no item data
-      const responseKeys = Object.keys(response.data || {}).join(',') || 'empty';
-      const dataKeys = Object.keys(response.data?.data || {}).join(',') || 'empty';
       return null;
     }
 
@@ -174,18 +172,7 @@ export async function fetchTokenMetadata(
     return tokenTraitData;
 
   } catch (error: any) {
-    // Handle specific error cases
-    if (error.response?.status === 400) {
-      // DEBUG: Log 400 errors with error message
-      const errorMsg = error.response?.data?.message || error.response?.data?.error || error.response?.data?.errors?.[0] || 'unknown';
-    } else if (error.response?.status) {
-      // Log other HTTP errors
-      errorLog('Metadata', `Failed to fetch token metadata | contractAddress=${contractAddress} | tokenId=${tokenId}`, error);
-    } else {
-      // Network/timeout errors
-      errorLog('Metadata', `Failed to fetch token metadata | contractAddress=${contractAddress} | tokenId=${tokenId}`, error);
-    }
-
+    errorLog('OpenSea', `[getTokenTraitsByIdentifier] API_ERROR | status=${error?.response?.status} | url=${BASE_URL}/opensea/graphql | contract=${contractAddress} | token=${tokenId}`, error?.response?.data);
     return null;
   }
 }
@@ -233,15 +220,14 @@ export async function getTraitFloorPrice(
       { category: 'Metadata' }
     );
 
+    warnLog('OpenSea', `[getTraitFloorPrice] RAW_RESPONSE | slug=${collectionSlug} | trait=${traitType}:${traitValue} | ${JSON.stringify(response.data).substring(0, 1500)}`);
     const edges = response.data?.data?.collections?.edges;
     if (!edges || edges.length === 0) {
-      // console.log(YELLOW + `[TOKEN METADATA] No collection data found for ${collectionSlug}` + RESET);
       return null;
     }
 
     const items = edges[0]?.node?.items?.edges;
     if (!items || items.length === 0) {
-      // console.log(YELLOW + `[TOKEN METADATA] No items with trait ${traitType}:${traitValue} found` + RESET);
       return null;
     }
 
@@ -258,7 +244,7 @@ export async function getTraitFloorPrice(
     return null;
 
   } catch (error) {
-    errorLog('Metadata', `Failed to fetch trait floor price | slug=${collectionSlug} | trait=${traitType}:${traitValue}`, error);
+    errorLog('OpenSea', `[getTraitFloorPrice] API_ERROR | status=${(error as any)?.response?.status} | url=${BASE_URL}/opensea/graphql | slug=${collectionSlug} | trait=${traitType}:${traitValue}`, (error as any)?.response?.data);
     return null;
   }
 }
@@ -311,6 +297,7 @@ export async function getTraitFilteredListings(
       { category: 'Metadata' }
     );
 
+    warnLog('OpenSea', `[getTraitFilteredListings] RAW_RESPONSE | slug=${collectionSlug} | trait=${traitType}:${traitValue} | ${JSON.stringify(response.data).substring(0, 1500)}`);
     const edges = response.data?.data?.collections?.edges;
     if (!edges || edges.length === 0) {
       return [];
@@ -343,7 +330,7 @@ export async function getTraitFilteredListings(
     return listings;
 
   } catch (error) {
-    errorLog('Metadata', `Failed to fetch trait filtered listings | slug=${collectionSlug} | trait=${traitType}:${traitValue}`, error);
+    errorLog('OpenSea', `[getTraitFilteredListings] API_ERROR | status=${(error as any)?.response?.status} | url=${BASE_URL}/opensea/graphql | slug=${collectionSlug} | trait=${traitType}:${traitValue}`, (error as any)?.response?.data);
     return [];
   }
 }

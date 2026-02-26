@@ -92,6 +92,85 @@ export const getRedisConnection = (): never => {
 const bullMQConnections = new Map<string, { redis: Redis | Cluster; createdAt: number; lastHealthCheck: number }>();
 let connectionIdCounter = 0;
 
+/**
+ * Build a natMap for Redis Cluster connections in Docker environments.
+ *
+ * Problem: ioredis opens a Cluster connection by contacting startup nodes
+ * (e.g. localhost:7000) via Docker port-mapping. The CLUSTER NODES/SLOTS
+ * response contains nodes' *internal* bridge IPs (e.g. 172.20.0.x). ioredis
+ * then tries to TCP-connect directly to those IPs — bypassing port-mapping.
+ * On the host those IPs are unreachable, so every connection hangs until
+ * connectTimeout fires, and the 'ready' event is never emitted.
+ *
+ * Solution: discover the internal IPs via CLUSTER NODES on a plain single-
+ * instance connection (which always works through port-mapping), then build
+ * a natMap that remaps each internal IP:port → localhost:port before ioredis
+ * opens the real cluster connections.
+ *
+ * Also handles first-run race: polls until the cluster has assigned slots
+ * (i.e. redis-cluster-init has finished), so the server naturally waits for
+ * cluster initialization without a separate sleep.
+ */
+async function buildClusterNatMap(
+  startupNodes: Array<{ host: string; port: number }>,
+  timeoutMs = 60_000
+): Promise<Record<string, { host: string; port: number }>> {
+  const deadline = Date.now() + timeoutMs;
+
+  console.log(`[Redis] Building cluster natMap from ${startupNodes.length} startup nodes...`);
+
+  while (Date.now() < deadline) {
+    for (const node of startupNodes) {
+      const tmp = new Redis({
+        host: node.host,
+        port: node.port,
+        connectTimeout: 5000,
+        enableReadyCheck: false,
+        lazyConnect: true,
+        maxRetriesPerRequest: 1,
+        enableOfflineQueue: false,
+      });
+      try {
+        await tmp.connect();
+        const raw = await (tmp as any).cluster('nodes') as string;
+        await tmp.disconnect();
+
+        const map: Record<string, { host: string; port: number }> = {};
+        let hasSlots = false;
+
+        for (const line of raw.split('\n')) {
+          if (!line.trim()) continue;
+          // Format: <id> <ip>:<port>@<busport> <flags> <master> <ping> <pong> <epoch> <state> [<slots>...]
+          const m = line.match(/\S+\s+(\S+):(\d+)@/);
+          if (!m) continue;
+          const [, ip, portStr] = m;
+          const port = parseInt(portStr, 10);
+          // Skip loopback entries — those don't need remapping
+          if (!ip || ip === '127.0.0.1' || ip === 'localhost') continue;
+          const mapped = startupNodes.find(n => n.port === port);
+          if (mapped) map[`${ip}:${port}`] = { host: mapped.host, port: mapped.port };
+          // A node has slots assigned when the line ends with slot ranges like "0-5460"
+          if (/\d+-\d+/.test(line)) hasSlots = true;
+        }
+
+        if (hasSlots && Object.keys(map).length > 0) {
+          console.log(`[Redis] natMap built: ${JSON.stringify(map)}`);
+          return map;
+        }
+
+        // Cluster nodes discovered but no slots yet — cluster-init still running
+        console.log(`[Redis] Cluster found but slots not yet assigned, waiting...`);
+      } catch (_err) {
+        // Node not reachable yet, try next
+        try { await tmp.disconnect(); } catch { /* ignore */ }
+      }
+    }
+    await new Promise(r => setTimeout(r, 1000));
+  }
+
+  throw new Error('[Redis] Cluster not initialized within timeout — is redis-cluster-init running?');
+}
+
 // Create a new Redis connection for BullMQ with enhanced configuration
 export const createBullMQConnection = async (identifier?: string): Promise<Redis | Cluster> => {
   const connectionId = identifier || `bullmq-${++connectionIdCounter}`;
@@ -151,15 +230,19 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
     };
 
     if ('cluster' in config && config.cluster) {
-      // Redis Cluster mode
+      // Redis Cluster mode — build natMap first to handle Docker NAT
+      // (internal bridge IPs from CLUSTER NODES are unreachable on the host;
+      //  natMap remaps them to localhost:<port> before ioredis connects)
+      const natMap = await buildClusterNatMap(config.nodes as Array<{ host: string; port: number }>);
       redis = new Redis.Cluster(config.nodes as ClusterNode[], {
         redisOptions: baseRedisOptions,
         // Cluster-specific options
-        scaleReads: 'slave',  // Read from replicas when possible
+        scaleReads: 'master',  // Dev cluster has no replicas
         maxRedirections: 16,
         retryDelayOnFailover: 100,
         retryDelayOnClusterDown: 300,
         slotsRefreshTimeout: 2000,
+        natMap,
       });
       // console.log(`[Redis] Created cluster connection ${connectionId} with ${config.nodes.length} nodes`);
     } else {
@@ -215,7 +298,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error(`Connection timeout waiting for ${connectionId}`));
-        }, 15000);
+        }, 30000);
 
         redis.once('ready', () => {
           clearTimeout(timeout);
@@ -237,7 +320,7 @@ export const createBullMQConnection = async (identifier?: string): Promise<Redis
       await new Promise<void>((resolve, reject) => {
         const timeout = setTimeout(() => {
           reject(new Error(`BullMQ connection ${connectionId} timed out waiting for ready state`));
-        }, 15000);
+        }, 30000);
 
         redis.once('ready', () => {
           clearTimeout(timeout);
