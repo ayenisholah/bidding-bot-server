@@ -1,7 +1,7 @@
 import { API_KEY } from "..";
 import { limiter, axiosInstance } from "../init";
 import { BASE_URL } from "../constants";
-import { errorLog, warnLog } from "./debug-file-logger";
+import { errorLog } from "./debug-file-logger";
 import { apiDedup } from "./api-dedup";
 import {
   balanceLRU,
@@ -67,7 +67,6 @@ async function fetchWethBalanceGraphQL(walletAddress: string): Promise<number> {
       { category: 'Balance' }
     );
 
-    warnLog('OpenSea', `[fetchWethBalanceGraphQL] RAW_RESPONSE | wallet=${walletAddress.slice(0, 10)}... | ${JSON.stringify(data).substring(0, 1500)}`);
     const wethBalance = data.data.addressBalances.find(
       (bal) =>
         bal.currency.contractAddress.toLowerCase() === WETH_ADDRESS &&

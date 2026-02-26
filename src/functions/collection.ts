@@ -334,7 +334,6 @@ export async function getOpenseaFloor(collectionSlug: string) {
         { category: 'Collection' }
       );
 
-      warnLog('OpenSea', `[getCollectionFloorPrice] RAW_RESPONSE | slug=${collectionSlug} | attempt=${attempt} | ${JSON.stringify(data).substring(0, 1500)}`);
       // Extract floor price from GraphQL response
       const floor_price = data?.data?.collectionItems?.items?.[0]?.bestListing?.pricePerItem?.token?.unit || 0;
 
@@ -735,7 +734,6 @@ async function fetchCollectionItemsRecursive(
       { category: 'Collection' }
     );
 
-    warnLog('OpenSea', `[getAllCollectionTokenIds] RAW_RESPONSE | slug=${variables.collectionSlug} | cursor=${cursor || 'initial'} | ${JSON.stringify(data).substring(0, 1500)}`);
     // Check if collectionItems is null
     if (!data?.data?.collectionItems) {
       if (allTokenIds.length > 0) {
@@ -923,7 +921,6 @@ async function fetchOpenseaTraitsRecursive(
     { category: 'Collection' }
   );
 
-  warnLog('OpenSea', `[getCollectionTraits] RAW_RESPONSE | slug=${slug} | cursor=${cursor || 'initial'} | ${JSON.stringify(data).substring(0, 1500)}`);
   if (!data?.data?.collectionBySlug?.attributes) {
     warnLog('Collection', `[collection.ts] No attributes found for collection | slug=${slug}`);
     throw new Error(`No attributes found for collection ${slug}`);
@@ -1085,7 +1082,6 @@ export async function fetchOpenseaTraitFloors(
       { category: 'Collection' }
     );
 
-    warnLog('OpenSea', `[getTraitFloorPrices] RAW_RESPONSE | slug=${slug} | ${JSON.stringify(data).substring(0, 1500)}`);
     // Extract unique trait floor prices from the response
     const traitFloorMap = new Map<string, TraitWithFloorPrice>();
 
@@ -1311,7 +1307,6 @@ export async function getCollectionTokenContractMap(collectionSlug: string, prio
         { category: 'Collection' }
       );
 
-      warnLog('OpenSea', `[getCollectionTokenContracts] RAW_RESPONSE | slug=${collectionSlug} | cursor=${cursor || 'initial'} | ${JSON.stringify(response?.data).substring(0, 1500)}`);
       const items: CollectionTokenItem[] = response?.data?.data?.collectionItems?.items || [];
       const nextCursor: string | null = response?.data?.data?.collectionItems?.nextPageCursor ?? null;
 

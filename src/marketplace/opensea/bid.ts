@@ -1646,7 +1646,6 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
       )
     );
 
-    warnLog('OpenSea', `[fetchItemOffers] RAW_RESPONSE | contract=${contractAddress} | token=${tokenId} | ${JSON.stringify(itemOffers.data).substring(0, 1500)}`);
     // Validate response structure
     const responseData = (itemOffers.data) as unknown as GraphQLItemOfferResponse;
     if (!responseData?.data?.itemOffers?.items) {
@@ -1852,7 +1851,6 @@ export async function fetchOpenseaOffers(
           }
         })
       );
-      warnLog('OpenSea', `[fetchCollectionOffers] RAW_RESPONSE | slug=${collectionSlug} | ${JSON.stringify(response.data).substring(0, 1500)}`);
     } catch (error) {
       errorLog('OpenSea', `[fetchCollectionOffers] API_ERROR | status=${(error as any)?.response?.status} | url=${BASE_URL}/opensea/graphql | slug=${collectionSlug}`, (error as any)?.response?.data);
       return [{amount:0,owner:'0x0000000000000000000000000000000000000000',currency:'WETH',usd:0,decimal:18,eth:0},{amount:0,owner:'0x0000000000000000000000000000000000000000',currency:'WETH',usd:0,decimal:18,eth:0}];
@@ -2222,8 +2220,6 @@ export async function fetchOpenseaOffers(
       r.status === 'fulfilled' ? r.value : null
     );
 
-    warnLog('OpenSea', `[fetchParallelOffers] COLLECTION_RAW_RESPONSE | slug=${collectionSlug} | ${(JSON.stringify(collectionResponse?.data) ?? '').substring(0, 1500)}`);
-    warnLog('OpenSea', `[fetchParallelOffers] TRAIT_RAW_RESPONSE | slug=${collectionSlug} | type=${type} | value=${value} | ${(JSON.stringify(traitResponse?.data) ?? '').substring(0, 1500)}`);
     // Parse responses
     const collectionOffers = collectionResponse?.data?.data?.collectionOfferAggregates?.items || [];
     const traitOffers = traitResponse?.data?.data?.traitOfferAggregates?.items || [];
@@ -2313,7 +2309,6 @@ export async function openseaTraitFloor(slug: string, trait: {
         "x-api-key": API_KEY
       },
     }));
-    warnLog('OpenSea', `[openseaTraitFloor] RAW_RESPONSE | slug=${slug} | trait=${JSON.stringify(trait)} | ${JSON.stringify(data).substring(0, 1500)}`);
     const floor = data.data.collectionItems.items[0].bestListing?.pricePerItem.token.unit;
 
     // Store in LRU cache
