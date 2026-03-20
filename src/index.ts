@@ -8022,6 +8022,9 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     const marketplacesToApprove = selectedMarketplaces.filter(m => validMarketplaces.includes(m));
     const approvalPhaseStart = Date.now();
 
+    // Resolve chain-specific WETH address
+    const wethAddress = getCurrencyAddress(task.chain, 'WETH') ?? WETH;
+
     // Parallel approval checks with caching
     const approvalPromises = marketplacesToApprove.map(async (mp) => {
       let marketplaceAddress: string;
@@ -8040,17 +8043,19 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
           return { marketplace: mp, approved: false, cached: false };
       }
 
+      warnLog('TaskInit', `APPROVAL_CHECK | taskId=${taskId} | marketplace=${mp} | chain=${task.chain} | weth=${wethAddress} | spender=${marketplaceAddress} | wallet=${wallet.address}`, { taskId });
+
       // Check cache first
-      const cached = await approvalCache.isApproved(wallet.address, marketplaceAddress, WETH);
+      const cached = await approvalCache.isApproved(wallet.address, marketplaceAddress, wethAddress, task.chain);
       if (cached) {
         return { marketplace: mp, approved: true, cached: true };
       }
 
-      const approved = await approveMarketplace(marketplaceAddress, privateKey, WETH);
+      const approved = await approveMarketplace(marketplaceAddress, privateKey, wethAddress, task.chain);
 
       if (approved) {
         // Update cache with successful approval
-        await approvalCache.setApproval(wallet.address, marketplaceAddress, WETH, task.chain, {
+        await approvalCache.setApproval(wallet.address, marketplaceAddress, wethAddress, task.chain, {
           approved: true,
           timestamp: Date.now(),
           allowance: MaxUint256.toString()
@@ -15804,8 +15809,11 @@ async function processOpenseaScheduledBid(task: ITask) {
         let wethBalance = 0;
         try {
           const { fetchERC20Balance } = await import('./utils/balance');
-          const { WETH } = await import('./utils/currencies');
-          wethBalance = await fetchERC20Balance(WALLET_ADDRESS, WETH);
+          wethBalance = await fetchERC20Balance(
+            WALLET_ADDRESS,
+            getCurrencyAddress(currentTask.chain, 'WETH') ?? WETH,
+            currentTask.chain || 'ethereum'
+          );
         } catch (error) {
           errorLog('OpenSea', 'Failed to fetch WETH balance', error);
         }
@@ -16486,7 +16494,11 @@ async function processOpenseaCollectionBid(data: {
         creatorFees,
         expiry,
         currency,
-        currentTask.contract.contractAddress
+        currentTask.contract.contractAddress,
+        undefined,
+        undefined,
+        'scheduled',
+        currentTask.chain || 'ethereum'
       )
 
       // Log success
@@ -16686,7 +16698,7 @@ async function processBlurScheduledBid(task: ITask) {
 
       const { fetchERC20Balance } = await import('./utils/balance');
       const { BETH } = await import('./utils/currencies');
-      bethBalance = await fetchERC20Balance(WALLET_ADDRESS, BETH);
+      bethBalance = await fetchERC20Balance(WALLET_ADDRESS, BETH, currentTask.chain || 'ethereum');
 
 
     } catch (error) {
@@ -17587,7 +17599,10 @@ async function processOpenseaTraitBid(data: IProcessOpenseaTraitBidData) {
         expiry,
         currency,
         task.contract.contractAddress,
-        trait
+        trait,
+        undefined,
+        'scheduled',
+        task.chain || 'ethereum'
       );
 
       // Log API success
@@ -17969,7 +17984,9 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
         currency,
         currentTask.contract.contractAddress,
         undefined,
-        asset
+        asset,
+        'scheduled',
+        currentTask.chain || 'ethereum'
       )
 
       // Bid successful
@@ -18180,7 +18197,8 @@ async function openseaCollectionCounterBid(job: Job<IOpenseaBidParams>) {
       currentTask.contract.contractAddress,
       undefined,
       undefined,
-      'counterbid'
+      'counterbid',
+      currentTask.chain || 'ethereum'
     );
 
 
@@ -18248,7 +18266,7 @@ async function magicedenCollectionCounterBid(job: Job<IMagicedenCollectionBidDat
     if (DEBUG) {
     }
 
-    await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency, undefined, undefined, 'counterbid');
+    await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency, undefined, undefined, 'counterbid', currentTask.chain || 'ethereum');
 
     // Initialize and increment counterbidCounts after successful bid
     if (!counterbidCounts[taskId]) {
@@ -18343,7 +18361,7 @@ async function magicedenTraitCounterBid(job: Job<IMagicedenTraitBidData>) {
     if (DEBUG) {
     }
 
-    await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency, bidTrait, undefined, 'counterbid');
+    await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice.toString(), privateKey, slug, expiration, currency, bidTrait, undefined, 'counterbid', currentTask.chain || 'ethereum');
 
     // Log API success
 
@@ -18728,7 +18746,8 @@ async function openseaTokenCounterBid(job: Job<IProcessOpenseaTokenBidData>) {
       currentTask.contract.contractAddress,
       undefined,
       asset,
-      'counterbid'
+      'counterbid',
+      currentTask.chain || 'ethereum'
     );
 
 
@@ -18849,7 +18868,8 @@ async function openseaTraitCounterBid(job: Job<IProcessOpenseaTraitBidData>) {
       currentTask.contract.contractAddress,
       trait,
       undefined,
-      'counterbid'
+      'counterbid',
+      currentTask.chain || 'ethereum'
     );
 
     if (!counterbidCounts[taskId]) {
@@ -18945,7 +18965,7 @@ async function magicedenTokenCounterBid(job: Job<IMagicedenTokenBidData>) {
     if (DEBUG) {
     }
 
-    await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice!, privateKey, slug, expiration, currency, undefined, tokenId, 'counterbid')
+    await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, offerPrice!, privateKey, slug, expiration, currency, undefined, tokenId, 'counterbid', currentTask.chain || 'ethereum')
 
     // Log API success
 
@@ -19407,8 +19427,11 @@ async function processMagicedenScheduledBid(task: ITask) {
         let wethBalance = 0;
         try {
           const { fetchERC20Balance } = await import('./utils/balance');
-          const { WETH } = await import('./utils/currencies');
-          wethBalance = await fetchERC20Balance(WALLET_ADDRESS, WETH);
+          wethBalance = await fetchERC20Balance(
+            WALLET_ADDRESS,
+            getCurrencyAddress(currentTask.chain, 'WETH') ?? WETH,
+            currentTask.chain || 'ethereum'
+          );
         } catch (error) {
           errorLog('MagicEden', 'Failed to fetch WETH balance', error);
         }
@@ -19969,7 +19992,7 @@ async function processMagicedenCollectionBid(data: { taskId: string }) {
       const secondBidEth = secondTopBidAmount / Math.pow(10, decimal);
 
 
-      await bidOnMagiceden(currentTask._id, bidCount, currentTask.wallet, currentTask.contract.contractAddress, 1, collectionOffer.toString(), privateKey, currentTask.contract.slug, expiration, currency);
+      await bidOnMagiceden(currentTask._id, bidCount, currentTask.wallet, currentTask.contract.contractAddress, 1, collectionOffer.toString(), privateKey, currentTask.contract.slug, expiration, currency, undefined, undefined, 'scheduled', currentTask.chain || 'ethereum');
 
       // Log success
       // Log job completed
@@ -20198,7 +20221,7 @@ async function processMagicedenTokenBid(data: IMagicedenTokenBidData) {
     try {
       // Log bid API start
 
-      await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, tokenOffer.toString(), privateKey, slug, expiration, currency, undefined, tokenId);
+      await bidOnMagiceden(taskId, bidCount, address, contractAddress, quantity, tokenOffer.toString(), privateKey, slug, expiration, currency, undefined, tokenId, 'scheduled', currentTask.chain || 'ethereum');
 
       // Log bid success
     } catch (bidError: any) {
@@ -20491,7 +20514,7 @@ async function processMagicedenTraitBid(data: {
       if (DEBUG) {
       }
 
-      await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, traitOffer.toString(), privateKey, slug, expiration, currency, trait)
+      await bidOnMagiceden(_id, bidCount, address, contractAddress, quantity, traitOffer.toString(), privateKey, slug, expiration, currency, trait, undefined, 'scheduled', currentTask.chain || 'ethereum')
 
       // Log bid success
 
@@ -25100,19 +25123,14 @@ async function withRetry<T>(fn: () => Promise<T>, retries = MAX_RETRIES): Promis
  * @param privateKey The private key of the wallet to approve from
  * @returns Promise<boolean> Whether the approval was successful
  */
-async function approveMarketplace(marketplace: string, privateKey: string, currency = WETH): Promise<boolean> {
+async function approveMarketplace(marketplace: string, privateKey: string, currency = WETH, chain: ChainValue = DEFAULT_CHAIN): Promise<boolean> {
 
   // Helper function to delay execution
 
 
   try {
-    // Set up provider and wallet with retry
-    const provider = await withRetry(async () => {
-      const p = new ethers.AlchemyProvider('mainnet', ALCHEMY_API_KEY);
-      // Test the connection
-      await p.getNetwork();
-      return p;
-    });
+    // Set up provider and wallet using chain-specific provider
+    const provider = getProviderForChain(chain);
 
     const wallet = new Web3Wallet(privateKey, provider);
     const address = (await wallet.address).toLowerCase();

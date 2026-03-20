@@ -257,7 +257,8 @@ export async function bidOnMagiceden(
   currency = WETH,
   trait?: Trait,
   tokenId?: number,
-  source: 'scheduled' | 'counterbid' = 'scheduled'
+  source: 'scheduled' | 'counterbid' = 'scheduled',
+  chain: ChainValue = DEFAULT_CHAIN
 ) {
 
   try {
@@ -291,7 +292,7 @@ export async function bidOnMagiceden(
     // Get wallet from cache
     const wallet = getWallet(privateKey);
 
-    const wethBalance = await fetchERC20Balance(maker, currency);
+    const wethBalance = await fetchERC20Balance(maker, currency, chain);
     const offerPriceEth = Math.round(Number(weiPrice)) / decimalPower;
 
     // Optimize decimal calculation

@@ -576,7 +576,8 @@ export async function bidOnOpensea(
   contractAddress: string,
   opensea_traits?: string,
   asset?: { contractAddress: string, tokenId: string | number },
-  source: 'scheduled' | 'counterbid' = 'scheduled'
+  source: 'scheduled' | 'counterbid' = 'scheduled',
+  chain: ChainValue = DEFAULT_CHAIN
 ) {
   // OpenSea requires minimum 10 minutes (600 seconds) expiration
   // Enforce minimum to prevent "Expiration time must be at least 10 minutes past submission time" errors
@@ -640,7 +641,7 @@ export async function bidOnOpensea(
         trackBalanceHit();
       } else {
         trackBalanceMiss();
-        wethBalance = await fetchERC20Balance(wallet_address, currency);
+        wethBalance = await fetchERC20Balance(wallet_address, currency, chain);
 
         // Cache for 60 seconds
         balanceLRU.set(balanceCacheKey, wethBalance);

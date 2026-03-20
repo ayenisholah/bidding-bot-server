@@ -173,7 +173,7 @@ export async function bidOnBlur(
       throw new TransferRestrictedError('blur', contractAddress, true);
     }
 
-    const bethBalance = await fetchERC20Balance(wallet_address, BLUR_POOL_ADDRESS);
+    const bethBalance = await fetchERC20Balance(wallet_address, BLUR_POOL_ADDRESS, 'ethereum');
     // Round to 6 decimal places first to avoid floating-point precision issues
     const offerPriceNumber = Math.round(Number(offer_price) / 1e18 * 1000000) / 1000000;
     let offerPriceEth: string = (Math.round(offerPriceNumber * 100) / 100).toFixed(2)

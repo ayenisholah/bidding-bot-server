@@ -82,6 +82,7 @@ class ApprovalCache {
 
         // Try primary provider for the specified chain
         const chainProvider = getProviderForChain(resolvedChain);
+        warnLog('Balance', `[RPC] isApproved | chain=${resolvedChain} | url=${chainProvider._getConnection().url}`);
         const tokenContract = new ethers.Contract(tokenAddress, ERC20_MIN_ABI, chainProvider);
         const allowancePromise = tokenContract.allowance(walletAddress, marketplaceAddress);
 

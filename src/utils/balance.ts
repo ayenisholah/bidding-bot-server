@@ -1,4 +1,4 @@
-import { errorLog } from "./debug-file-logger";
+import { errorLog, warnLog } from "./debug-file-logger";
 import { ChainValue, DEFAULT_CHAIN, getProviderForChain, getCurrencyDecimals } from "./chains";
 import {
   balanceLRU,
@@ -24,6 +24,7 @@ async function fetchBalanceFromAlchemy(
   chain: ChainValue
 ): Promise<string> {
   const provider = getProviderForChain(chain);
+  warnLog('Balance', `[RPC] fetchBalanceFromAlchemy | chain=${chain} | url=${provider._getConnection().url}`);
 
   const contract = new ethers.Contract(
     tokenAddress,
