@@ -17829,7 +17829,7 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       // BLOCKING fetch: wallets and item offers (needed for intelligent pricing)
       const [walletsArr, highestBid] = await Promise.all([
         walletCache.getAllWallets(),
-        fetchItemOffers(resolvedContractAddress, asset.tokenId.toString())
+        fetchItemOffers(resolvedContractAddress, asset.tokenId.toString(), currentTask.chain || 'ethereum')
       ]);
 
       // Validate fetchItemOffers result - throw error immediately if failed
