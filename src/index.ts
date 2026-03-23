@@ -7768,7 +7768,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
   // This prevents race conditions where bids placed during startup cause immediate divergence
   const cacheInitStart = Date.now();
   try {
-    const existingOrders = await orderCache.getActiveByTask(task._id);
+    const existingOrders = await orderCache.getActiveByTask(taskId);
 
     const counts: { [marketplace: string]: number } = {
       opensea: 0, magiceden: 0, blur: 0
@@ -7787,7 +7787,7 @@ async function startTaskInternal(task: ITask, start: boolean, marketplace?: stri
     }
 
     // Set bidStats for this task
-    bidStats[task._id] = {
+    bidStats[taskId] = {
       opensea: counts['opensea'],
       magiceden: counts['magiceden'],
       blur: counts['blur']
@@ -11164,10 +11164,11 @@ async function cancelOpenseaOrdersDirectly({
 
 
   let completed = 0;
+  const taskChain = activeTasks.get(taskId)?.chain || 'ethereum';
 
   try {
     for (const order of orders) {
-      await cancelOrderWithoutTracking(order.orderHash, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId);
+      await cancelOrderWithoutTracking(order.orderHash, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId, taskChain);
       await safeDeleteFromCache(taskId, 'opensea', order.identifier, order.orderHash);
       completed += 1;
     }
@@ -20605,10 +20606,10 @@ async function bulkCancelOpenseaBid(data: { walletId: string, orderId: string, t
     }
 
     const privateKey: string = decryptPrivateKey(wallet.encryptedPrivateKey);
-
+    const taskChain = activeTasks.get(taskId)?.chain || 'ethereum';
 
     // First, cancel the order with OpenSea API (but don't update tracking yet)
-    await cancelOrderWithoutTracking(orderId, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId);
+    await cancelOrderWithoutTracking(orderId, OPENSEA_PROTOCOL_ADDRESS, privateKey, taskId, taskChain);
 
     // Track successful cancellation for verification
     if (!successfullyCancelledOrders.has(taskId)) {
@@ -20797,8 +20798,8 @@ async function validateBidCountInternal() {
       // Keep existing bidStats for this task - cancellation will decrement via decrementBidCount
       continue;
     }
-    const counts = await orderCache.countGroupedByMarketplace(task._id);
-    bidStatsMap[task._id] = {
+    const counts = await orderCache.countGroupedByMarketplace(taskIdStr);
+    bidStatsMap[taskIdStr] = {
       opensea: counts['opensea'] || 0,
       magiceden: counts['magiceden'] || 0,
       blur: counts['blur'] || 0
