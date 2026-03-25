@@ -15166,6 +15166,8 @@ async function performMarketplacePreprocessing(
   let openseaApiReturnedEmpty = false;
   let magicedenApiCalled = false;
   let magicedenApiReturnedEmpty = false;
+  // Track whether trait token fetches failed (transient API error vs genuine zero tokens)
+  let hadTraitFetchError = false;
 
   // Extract manual token IDs (needed for error checking)
   const manualTokenIds = task.tokenIds.filter(id => !isNaN(Number(id)) && !id.toString().toLowerCase().includes('bot')).map(id => id.toString());
@@ -15249,6 +15251,7 @@ async function performMarketplacePreprocessing(
                   }
                 })
                 .catch((error) => {
+                  hadTraitFetchError = true;
                   errorLog('Preprocessing', `Failed to fetch trait items for ${task.contract.slug}`, error);
                   // Continue without trait tokens rather than failing completely
                 });
@@ -15279,6 +15282,7 @@ async function performMarketplacePreprocessing(
             }
             traitTokens.push(...items);
           } catch (error) {
+            hadTraitFetchError = true;
             errorLog('Preprocessing', `Failed to fetch trait items for ${task.contract.slug}`, error);
             // Continue without trait tokens rather than failing completely
           }
@@ -15461,9 +15465,15 @@ async function performMarketplacePreprocessing(
         if (openseaApiCalled && openseaApiReturnedEmpty && !manualTokenIds.length && !traitTokens.length) {
           throw new Error(`No listings found on OpenSea for ${task.contract.slug}. Collection may have no active listings.`);
         }
-        // Otherwise, just skip without error
-        preprocessing.opensea.skipReason = `No tokens found for ${task.contract.slug}`;
-        preprocessing.opensea.jobCount = 0;
+        // If trait fetches failed due to API errors, skip this loop iteration silently —
+        // do NOT set skipReason (which would trigger warningBids and stop the task).
+        // The next loop iteration will retry the trait fetch.
+        if (hadTraitFetchError) {
+          preprocessing.opensea.jobCount = 0;
+        } else {
+          preprocessing.opensea.skipReason = `No tokens found for ${task.contract.slug}`;
+          preprocessing.opensea.jobCount = 0;
+        }
       }
     } else if (traitBid) {
       // Trait bid - need to check if collection supports trait offers
@@ -15605,9 +15615,14 @@ async function performMarketplacePreprocessing(
         if (magicedenApiCalled && magicedenApiReturnedEmpty && !manualTokenIds.length) {
           throw new Error(`No tokens found on MagicEden for ${task.contract.slug}. Collection may have no active listings.`);
         }
-        // Otherwise, just skip without error
-        preprocessing.magiceden.skipReason = `No tokens found for ${task.contract.slug}`;
-        preprocessing.magiceden.jobCount = 0;
+        // If trait fetches failed due to API errors, skip this loop iteration silently —
+        // do NOT set skipReason (which would trigger warningBids and stop the task).
+        if (hadTraitFetchError) {
+          preprocessing.magiceden.jobCount = 0;
+        } else {
+          preprocessing.magiceden.skipReason = `No tokens found for ${task.contract.slug}`;
+          preprocessing.magiceden.jobCount = 0;
+        }
       }
     } else if (traitBid) {
       // Trait bid
