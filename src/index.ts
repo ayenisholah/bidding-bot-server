@@ -21775,6 +21775,7 @@ app.post('/api/collection/stats', async (req, res) => {
           trait.values.forEach((valueObj: any) => {
             const traitValue = valueObj.value;
             const count = valueObj.count || 0;
+            const openseaFloor = valueObj.floorPrice || 0;
 
             if (!combinedTraits.counts[category][traitValue]) {
               combinedTraits.counts[category][traitValue] = {
@@ -21787,6 +21788,7 @@ app.post('/api/collection/stats', async (req, res) => {
             }
 
             combinedTraits.counts[category][traitValue].count = count;
+            combinedTraits.counts[category][traitValue].openseaFloor = openseaFloor;
             combinedTraits.counts[category][traitValue].availableInMarketplaces.push("opensea");
           });
         }
@@ -21879,14 +21881,6 @@ app.post('/api/collection/stats', async (req, res) => {
         });
       });
     });
-
-    Object.keys(combinedTraits.counts).forEach(category => {
-      Object.keys(combinedTraits.counts[category]).forEach(trait => {
-        const traitData = combinedTraits.counts[category][trait];
-        traitData.openseaFloor = traitData.magicedenFloor;
-      });
-    });
-
 
     // 4. Build response data
     const data = {

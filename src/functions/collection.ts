@@ -715,7 +715,7 @@ async function fetchCollectionItemsRecursive(
 ): Promise<string[]> {
   const queryVariables = {
     ...variables,
-    cursor: cursor
+    after: cursor
   };
   const payload = {
     operationName: 'CollectionItemsListQuery',
@@ -822,6 +822,7 @@ async function fetchCollectionItemsRecursive(
 interface TraitValue {
   value: string;
   count: number;
+  floorPrice?: number;
   __typename?: string;
 }
 
@@ -836,19 +837,6 @@ interface CollectionAttribute {
   values?: TraitValue[];
   range?: TraitRange;
   __typename?: string;
-}
-
-interface TraitResponse {
-  data: {
-    collectionBySlug: {
-      id: string;
-      attributes: {
-        items: CollectionAttribute[];
-        nextPageCursor: string | null;
-      };
-      __typename: string;
-    };
-  };
 }
 
 export async function fetchOpenseaTraits(
@@ -894,25 +882,55 @@ export async function fetchOpenseaTraits(
 }
 
 // Helper function for recursive fetching
+// Updated 2026-04-15: OpenSea changed from TraitFiltersSectionQuery (collectionBySlug.attributes)
+// to CollectionTraitItemsListQuery (collectionAttributesBySlug) with flat traitType+traitValue items
 async function fetchOpenseaTraitsRecursive(
   slug: string,
   limit: number = 100,
   cursor?: string
 ): Promise<CollectionAttribute[]> {
+  const query = `query CollectionTraitItemsListQuery($after: Cursor, $sort: CollectionAttributeSort!, $collectionSlug: String!, $limit: Int!, $filter: CollectionAttributeFilter) {
+  collectionAttributesBySlug(
+    slug: $collectionSlug
+    after: $after
+    sort: $sort
+    limit: $limit
+    filter: $filter
+  ) {
+    items {
+      traitType
+      traitValue
+      count
+      floorPrice {
+        pricePerItem {
+          token {
+            unit
+          }
+        }
+      }
+      __typename
+    }
+    nextPageCursor
+    __typename
+  }
+}`;
+
   const payload = {
-    operationName: 'TraitFiltersSectionQuery',
-    query: "query TraitFiltersSectionQuery($slug: String!, $limit: Int!, $cursor: String) {\n  collectionBySlug(slug: $slug) {\n    __typename\n    ... on Collection {\n      id\n      attributes(limit: $limit, cursor: $cursor) {\n        items {\n          traitType\n          ...TraitFilterPanelFragment\n          __typename\n        }\n        nextPageCursor\n        __typename\n      }\n      __typename\n    }\n  }\n}\nfragment TraitFilterPanelFragment on CollectionAttribute {\n  traitType\n  range {\n    __typename\n  }\n  values {\n    __typename\n  }\n  ...TraitFiltersStringTraitInputFragment\n  ...TraitFiltersNumericTraitInputFragment\n  __typename\n}\nfragment TraitFiltersStringTraitInputFragment on CollectionAttribute {\n  traitType\n  values {\n    value\n    count\n    __typename\n  }\n  __typename\n}\nfragment TraitFiltersNumericTraitInputFragment on CollectionAttribute {\n  traitType\n  range {\n    min\n    max\n    __typename\n  }\n  __typename\n}",
+    operationName: 'CollectionTraitItemsListQuery',
+    query,
     variables: {
+      collectionSlug: slug,
+      filter: { attributes: [] },
       limit,
-      slug,
-      cursor
+      sort: { by: 'FLOOR_PRICE', direction: 'DESC' },
+      after: cursor || undefined
     }
   };
 
   const { data } = await apiDedup(
     `opensea-traits-${slug}-${cursor || 'initial'}`,
     () => limiter.schedule({ priority: 0 }, () =>
-      axiosInstance.post<TraitResponse>(`${BASE_URL}/opensea/graphql`, payload, {
+      axiosInstance.post(`${BASE_URL}/opensea/graphql`, payload, {
         headers: {
           "x-api-key": API_KEY
         },
@@ -921,42 +939,75 @@ async function fetchOpenseaTraitsRecursive(
     { category: 'Collection' }
   );
 
-  if (!data?.data?.collectionBySlug?.attributes) {
+  if (!data?.data?.collectionAttributesBySlug?.items) {
     warnLog('Collection', `[collection.ts] No attributes found for collection | slug=${slug}`);
     throw new Error(`No attributes found for collection ${slug}`);
   }
 
-  let attributes = data.data.collectionBySlug.attributes.items;
-  const nextCursor = data.data.collectionBySlug.attributes.nextPageCursor;
+  let flatItems = data.data.collectionAttributesBySlug.items;
+  const nextCursor = data.data.collectionAttributesBySlug.nextPageCursor;
 
   // If there's more data, fetch recursively
   if (nextCursor) {
-    const nextPageAttributes = await fetchOpenseaTraitsRecursive(slug, limit, nextCursor);
-    attributes = [...attributes, ...nextPageAttributes];
+    const nextPageItems = await fetchOpenseaTraitsRecursive(slug, limit, nextCursor);
+    // nextPageItems are already grouped CollectionAttribute[], so we need to merge after grouping
+    // Instead, collect all flat items first, then group at the end
+    // But since recursive calls return grouped data, we handle flat→grouped here and merge below
+    const currentGrouped = groupFlatTraitItems(flatItems);
+    return mergeGroupedTraits(currentGrouped, nextPageItems);
   }
 
-  // Clean up the attributes data structure
-  const cleanedAttributes = attributes.map(attr => {
-    const cleaned: any = {
-      traitType: attr.traitType,
-      values: attr.values?.map(v => ({
-        value: v.value,
-        count: v.count
-      })) || []
-    };
+  // Group flat traitType+traitValue items into CollectionAttribute[] format
+  return groupFlatTraitItems(flatItems);
+}
 
-    // Only include range if it exists and is not null
-    if (attr.range) {
-      cleaned.range = {
-        min: attr.range.min,
-        max: attr.range.max
-      };
+/**
+ * Groups flat CollectionAttributeFlatValue items (traitType + traitValue + count)
+ * into CollectionAttribute[] format (traitType + values[]).
+ * Required because OpenSea's new API returns one item per trait value,
+ * but downstream code expects grouped format.
+ */
+function groupFlatTraitItems(flatItems: any[]): CollectionAttribute[] {
+  const grouped = new Map<string, TraitValue[]>();
+
+  for (const item of flatItems) {
+    const { traitType, traitValue, count } = item;
+    const floorPrice = item.floorPrice?.pricePerItem?.token?.unit;
+    if (!grouped.has(traitType)) {
+      grouped.set(traitType, []);
     }
+    grouped.get(traitType)!.push({
+      value: traitValue,
+      count: count || 0,
+      ...(floorPrice !== undefined && floorPrice !== null ? { floorPrice } : {})
+    });
+  }
 
-    return cleaned;
-  });
+  return Array.from(grouped.entries()).map(([traitType, values]) => ({
+    traitType,
+    values
+  }));
+}
 
-  return cleanedAttributes;
+/**
+ * Merges two CollectionAttribute[] arrays, combining values under matching traitTypes.
+ */
+function mergeGroupedTraits(a: CollectionAttribute[], b: CollectionAttribute[]): CollectionAttribute[] {
+  const merged = new Map<string, TraitValue[]>();
+
+  for (const attr of [...a, ...b]) {
+    if (!merged.has(attr.traitType)) {
+      merged.set(attr.traitType, []);
+    }
+    if (attr.values) {
+      merged.get(attr.traitType)!.push(...attr.values);
+    }
+  }
+
+  return Array.from(merged.entries()).map(([traitType, values]) => ({
+    traitType,
+    values
+  }));
 }
 
 interface TraitFloorPrice {

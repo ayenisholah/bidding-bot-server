@@ -1060,7 +1060,6 @@ async function submitOfferToOpensea(decimal: number, currencySymbol: string, bid
     });
     offer = response.data;
 
-
   } catch (error) {
     // Handle abort gracefully - don't log as error
     if (axios.isCancel(error)) {
@@ -1697,12 +1696,11 @@ export async function fetchOpenseaOffers(
     // Use OpenSea GraphQL API for collection offers
     const query = {
       operationName: "CollectionOffersTableQuery",
-      query: `query CollectionOffersTableQuery($collectionSlug: String!, $filter: CollectionOffersFilter, $sort: CollectionOfferAggregateSort!, $cursor: String, $limit: Int!) {
+      query: `query CollectionOffersTableQuery($collectionSlug: String!, $filter: CollectionOffersFilter, $sort: CollectionOfferAggregateSort!, $limit: Int!) {
         collectionOfferAggregates(
           collectionSlug: $collectionSlug
           filter: $filter
           sort: $sort
-          cursor: $cursor
           limit: $limit
         ) {
           items {
@@ -1901,12 +1899,11 @@ export async function fetchOpenseaOffers(
       () => {
         const collectionQuery = {
           operationName: "CollectionOffersTableQuery",
-          query: `query CollectionOffersTableQuery($collectionSlug: String!, $filter: CollectionOffersFilter, $sort: CollectionOfferAggregateSort!, $cursor: String, $limit: Int!) {
+          query: `query CollectionOffersTableQuery($collectionSlug: String!, $filter: CollectionOffersFilter, $sort: CollectionOfferAggregateSort!, $limit: Int!) {
             collectionOfferAggregates(
               collectionSlug: $collectionSlug
               filter: $filter
               sort: $sort
-              cursor: $cursor
               limit: $limit
             ) {
               items {
@@ -2059,12 +2056,11 @@ export async function fetchOpenseaOffers(
       () => {
         const traitQuery = {
           operationName: "TraitOffersTableQuery",
-          query: `query TraitOffersTableQuery($collectionSlug: String!, $filter: TraitOffersFilter, $sort: TraitOfferAggregateSort!, $cursor: String, $limit: Int!) {
+          query: `query TraitOffersTableQuery($collectionSlug: String!, $filter: TraitOffersFilter, $sort: TraitOfferAggregateSort!, $limit: Int!) {
             traitOfferAggregates(
               collectionSlug: $collectionSlug
               filter: $filter
               sort: $sort
-              cursor: $cursor
               limit: $limit
             ) {
               items {

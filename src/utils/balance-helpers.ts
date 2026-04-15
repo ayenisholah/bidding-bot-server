@@ -226,12 +226,5 @@ export async function checkBalanceBeforeBid(
 
   const sufficient = balance >= requiredAmountEth;
 
-  if (!sufficient) {
-    warnLog('BidFlow',
-      `[Balance Pre-Check] Insufficient ${currencySymbol} | taskId=${taskId} | collection=${slug} | required=${requiredAmountEth} | available=${balance}`,
-      { taskId, marketplace, slug, required: requiredAmountEth, available: balance }
-    );
-  }
-
   return { sufficient, balance };
 }

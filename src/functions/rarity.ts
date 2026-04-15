@@ -48,7 +48,7 @@ async function fetchRarityTokensRecursive(
     query: CollectionItemsListQuery,
     variables: {
       collectionSlug,
-      cursor,
+      after: cursor,
       limit: 100,
       sort: { by: "RARITY", direction: "DESC" },
     },

@@ -1,8 +1,8 @@
 export const CollectionItemsListQuery = `
-    query CollectionItemsListQuery($cursor: String, $sort: CollectionItemsSort!, $filter: CollectionItemsFilter, $collectionSlug: String!, $limit: Int!) {
+    query CollectionItemsListQuery($after: Cursor, $sort: CollectionItemsSort!, $filter: CollectionItemsFilter, $collectionSlug: String!, $limit: Int!) {
       collectionItems(
         collectionSlug: $collectionSlug
-        cursor: $cursor
+        after: $after
         sort: $sort
         filter: $filter
         limit: $limit
