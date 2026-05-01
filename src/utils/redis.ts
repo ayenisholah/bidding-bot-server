@@ -120,6 +120,10 @@ async function buildClusterNatMap(
   console.log(`[Redis] Building cluster natMap from ${startupNodes.length} startup nodes...`);
 
   while (Date.now() < deadline) {
+    const map: Record<string, { host: string; port: number }> = {};
+    const discovered = new Set<string>();
+    let hasFullSlotCoverage = false;
+
     for (const node of startupNodes) {
       const tmp = new Redis({
         host: node.host,
@@ -132,39 +136,60 @@ async function buildClusterNatMap(
       });
       try {
         await tmp.connect();
-        const raw = await (tmp as any).cluster('nodes') as string;
+        const rawNodes = await (tmp as any).cluster('nodes') as string;
+        const rawSlots = await (tmp as any).cluster('slots') as Array<any[]>;
         await tmp.disconnect();
 
-        const map: Record<string, { host: string; port: number }> = {};
-        let hasSlots = false;
-
-        for (const line of raw.split('\n')) {
+        for (const line of rawNodes.split('\n')) {
           if (!line.trim()) continue;
           // Format: <id> <ip>:<port>@<busport> <flags> <master> <ping> <pong> <epoch> <state> [<slots>...]
           const m = line.match(/\S+\s+(\S+):(\d+)@/);
           if (!m) continue;
           const [, ip, portStr] = m;
           const port = parseInt(portStr, 10);
-          // Skip loopback entries — those don't need remapping
-          if (!ip || ip === '127.0.0.1' || ip === 'localhost') continue;
+          discovered.add(`${ip}:${port}`);
           const mapped = startupNodes.find(n => n.port === port);
           if (mapped) map[`${ip}:${port}`] = { host: mapped.host, port: mapped.port };
-          // A node has slots assigned when the line ends with slot ranges like "0-5460"
-          if (/\d+-\d+/.test(line)) hasSlots = true;
         }
 
-        if (hasSlots && Object.keys(map).length > 0) {
-          console.log(`[Redis] natMap built: ${JSON.stringify(map)}`);
-          return map;
+        const coveredSlots = new Set<number>();
+        for (const slotRange of rawSlots) {
+          const [start, end, ...slotNodes] = slotRange;
+          if (typeof start !== 'number' || typeof end !== 'number') continue;
+
+          // Mark ranges instead of every slot where possible, but keep the check simple for dev startup.
+          for (let slot = start; slot <= end; slot++) coveredSlots.add(slot);
+
+          for (const slotNode of slotNodes) {
+            const [ip, port] = slotNode || [];
+            if (!ip || typeof port !== 'number') continue;
+            discovered.add(`${ip}:${port}`);
+            const mapped = startupNodes.find(n => n.port === port);
+            if (mapped) map[`${ip}:${port}`] = { host: mapped.host, port: mapped.port };
+          }
         }
 
-        // Cluster nodes discovered but no slots yet — cluster-init still running
-        console.log(`[Redis] Cluster found but slots not yet assigned, waiting...`);
+        hasFullSlotCoverage = hasFullSlotCoverage || coveredSlots.size === 16384;
       } catch (_err) {
         // Node not reachable yet, try next
         try { await tmp.disconnect(); } catch { /* ignore */ }
       }
     }
+
+    const mappedPorts = new Set(Object.values(map).map(node => node.port));
+    const hasAllStartupPorts = startupNodes.every(node => mappedPorts.has(node.port));
+
+    if (hasFullSlotCoverage && hasAllStartupPorts && Object.keys(map).length > 0) {
+      console.log(`[Redis] natMap built: ${JSON.stringify(map)}`);
+      return map;
+    }
+
+    // Cluster nodes discovered but no slots yet, or not every advertised Docker IP is mapped.
+    console.log(
+      `[Redis] Cluster not fully ready for host NAT yet | ` +
+      `fullSlots=${hasFullSlotCoverage} | mappedPorts=${Array.from(mappedPorts).join(',') || 'none'} | ` +
+      `discovered=${Array.from(discovered).join(',') || 'none'}`
+    );
     await new Promise(r => setTimeout(r, 1000));
   }
 
@@ -419,9 +444,26 @@ export const closeAllBullMQConnections = async () => {
   const promises: Promise<void>[] = [];
 
   for (const [id, info] of bullMQConnections.entries()) {
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    const closeTimeout = new Promise<void>((resolve) => {
+      timeout = setTimeout(() => {
+        try {
+          info.redis.disconnect();
+        } catch { /* ignore */ }
+        warnLog('Redis', `Forced disconnect for BullMQ connection after close timeout: ${id}`);
+        resolve();
+      }, 5000);
+    });
+
     promises.push(
-      info.redis.quit()
-        .then(() => console.log(`[Redis] Closed BullMQ connection: ${id}`))
+      Promise.race([
+        info.redis.quit()
+          .then(() => console.log(`[Redis] Closed BullMQ connection: ${id}`)),
+        closeTimeout
+      ])
+        .finally(() => {
+          if (timeout) clearTimeout(timeout);
+        })
         .catch(err => errorLog('Redis', `Error closing BullMQ connection ${id}`, err))
     );
   }

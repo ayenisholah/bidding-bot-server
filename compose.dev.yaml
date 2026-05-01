@@ -91,7 +91,10 @@ services:
         sleep 10
         STATE=$$(redis-cli -h redis-node-1 -p 7000 cluster info | grep cluster_state | cut -d: -f2 | tr -d '[:space:]')
         if [ \"$$STATE\" = 'ok' ]; then echo 'Cluster already healthy, skipping init.'; exit 0; fi
-        echo 'Resetting all Redis nodes (clears data and cluster state)...'
+        echo 'Flushing and resetting all Redis nodes (clears data and cluster state)...'
+        redis-cli -h redis-node-1 -p 7000 FLUSHALL || echo 'Failed to flush redis-node-1'
+        redis-cli -h redis-node-2 -p 7001 FLUSHALL || echo 'Failed to flush redis-node-2'
+        redis-cli -h redis-node-3 -p 7002 FLUSHALL || echo 'Failed to flush redis-node-3'
         redis-cli -h redis-node-1 -p 7000 CLUSTER RESET HARD || echo 'Failed to reset redis-node-1'
         redis-cli -h redis-node-2 -p 7001 CLUSTER RESET HARD || echo 'Failed to reset redis-node-2'
         redis-cli -h redis-node-3 -p 7002 CLUSTER RESET HARD || echo 'Failed to reset redis-node-3'
