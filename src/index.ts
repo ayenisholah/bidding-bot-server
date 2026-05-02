@@ -17871,48 +17871,75 @@ async function processOpenseaTokenBid(data: IProcessOpenseaTokenBidData) {
       );
 
       // BLOCKING fetch: wallets and item offers (needed for intelligent pricing)
-      const [walletsArr, highestBid] = await Promise.all([
+      const itemOffersFetchStart = Date.now();
+      const [walletsArr, itemOffersResult] = await Promise.all([
         walletCache.getAllWallets(),
         fetchItemOffers(resolvedContractAddress, asset.tokenId.toString())
       ]);
+      const itemOffersFetchMs = Date.now() - itemOffersFetchStart;
 
-      // Validate fetchItemOffers result - throw error immediately if failed
-      if (!highestBid || highestBid.length === 0) {
-        // fetchItemOffers failed - THROW ERROR IMMEDIATELY (no cached order fallback for placing bids)
-        errorLog('BidFlow',
-          `[fetchItemOffers Failed] Cannot place bid without real-time market data | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | Retrying job...`,
-          undefined,
-          { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId }
-        );
-
-        // Throw error to trigger BullMQ retry - job will retry when API recovers
-        throw new Error(`fetchItemOffers failed for ${slug} token ${asset.tokenId} - retrying until API recovers`);
+      // Market data is required for outbid mode. If OpenSea offers are temporarily unavailable,
+      // skip this token attempt without recording a dashboard bid error; the loop will retry.
+      if (!itemOffersResult.ok) {
+        return;
       } else {
+        const highestBid = itemOffersResult.offers || [];
         const [topOffer, secondOffer] = highestBid;
 
         // Validate topOffer has valid data
         if (!topOffer || (topOffer.eth === 0 && topOffer.usd === 0)) {
           errorLog('BidFlow',
-            `[Invalid TopOffer] API returned malformed data (zero values) | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | Retrying job...`,
+            `[Invalid TopOffer] API returned malformed data (zero values) | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | loop will retry later`,
             undefined,
-            { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId, topOffer }
+            {
+              taskId: _id,
+              marketplace: 'opensea',
+              slug,
+              tokenId: asset.tokenId,
+              originalContractAddress: asset.contractAddress,
+              resolvedContractAddress,
+              itemOffersFetchMs,
+              topOffer,
+              secondOffer,
+              currency,
+              currencySymbol,
+              decimal,
+              minBidPriceEth,
+              offerPriceEth,
+              maxBidPriceEth
+            }
           );
 
-          // Throw error - malformed API response should trigger retry, not blind minBid placement
-          throw new Error(`fetchItemOffers returned invalid data (zero values) for ${slug} token ${asset.tokenId}`);
+          return;
         } else {
           const highestBidAmount = usdcBid ? topOffer.usd * Math.pow(10, decimal) : topOffer.eth * Math.pow(10, decimal);
 
           // Safety check for zero bid amount
           if (highestBidAmount === 0) {
             errorLog('BidFlow',
-              `[Zero HighestBid] Calculated bid amount is zero (malformed API data) | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | topOffer.eth=${topOffer.eth} | topOffer.usd=${topOffer.usd} | Retrying job...`,
+              `[Zero HighestBid] Calculated bid amount is zero (malformed API data) | taskId=${_id} | collection=${slug} | token=${asset.tokenId} | topOffer.eth=${topOffer.eth} | topOffer.usd=${topOffer.usd} | loop will retry later`,
               undefined,
-              { taskId: _id, marketplace: 'opensea', slug, tokenId: asset.tokenId, topOfferEth: topOffer.eth, topOfferUsd: topOffer.usd }
+              {
+                taskId: _id,
+                marketplace: 'opensea',
+                slug,
+                tokenId: asset.tokenId,
+                originalContractAddress: asset.contractAddress,
+                resolvedContractAddress,
+                itemOffersFetchMs,
+                topOfferEth: topOffer.eth,
+                topOfferUsd: topOffer.usd,
+                topOffer,
+                currency,
+                currencySymbol,
+                decimal,
+                minBidPriceEth,
+                offerPriceEth,
+                maxBidPriceEth
+              }
             );
 
-            // Throw error - zero calculated bid indicates malformed data, should retry
-            throw new Error(`Calculated bid amount is zero for ${slug} token ${asset.tokenId} (topOffer.eth=${topOffer.eth}, topOffer.usd=${topOffer.usd})`);
+            return;
           } else {
             const secondTopBidAmount = usdcBid ? secondOffer.usd * Math.pow(10, decimal) : secondOffer.eth * Math.pow(10, decimal);
             const outbidMargin = calculateOutbidMargin(highestBidAmount ? highestBidAmount / Math.pow(10, decimal) : offerPriceEth, currency);
@@ -18239,8 +18266,7 @@ async function openseaCollectionCounterBid(job: Job<IOpenseaBidParams>) {
       currency,
       currentTask.contract.contractAddress,
       undefined,
-      undefined,
-      'counterbid'
+      undefined
     );
 
 
@@ -18787,8 +18813,7 @@ async function openseaTokenCounterBid(job: Job<IProcessOpenseaTokenBidData>) {
       currency,
       currentTask.contract.contractAddress,
       undefined,
-      asset,
-      'counterbid'
+      asset
     );
 
 
@@ -18908,8 +18933,7 @@ async function openseaTraitCounterBid(job: Job<IProcessOpenseaTraitBidData>) {
       currency,
       currentTask.contract.contractAddress,
       trait,
-      undefined,
-      'counterbid'
+      undefined
     );
 
     if (!counterbidCounts[taskId]) {

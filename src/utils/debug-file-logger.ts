@@ -15,8 +15,6 @@ try {
   fs.unlinkSync(testFile);
 } catch (err) {
   CAN_WRITE_LOGS = false;
-  console.error(`[LogWriter] CRITICAL: Cannot write to ${LOG_DIR}: ${(err as Error).message}`);
-  console.error('[LogWriter] Debug logs will NOT be saved to files! Fix volume permissions.');
 }
 
 // ============================================
@@ -60,7 +58,6 @@ function shouldRotateLogFiles(): boolean {
  * Flushes current buffers before updating date.
  */
 function rotateLogFiles(): void {
-  const oldDate = currentLogDate;
   const newDate = new Date().toISOString().split('T')[0];
 
   // Flush pending logs to old date files first
@@ -79,7 +76,6 @@ function rotateLogFiles(): void {
 
   // Update to new date
   currentLogDate = newDate;
-  console.log(`[LogWriter] LOG_ROTATION | ${oldDate} → ${newDate}`);
 }
 
 /**
@@ -108,20 +104,12 @@ async function cleanupOldLogFiles(): Promise<void> {
         if (stats.mtimeMs < cutoffTime) {
           await fs.promises.unlink(filePath);
           deletedCount++;
-          const ageHours = Math.round((now - stats.mtimeMs) / (60 * 60 * 1000));
-          console.log(`[LogWriter] CLEANUP | Deleted: ${file} (age: ${ageHours}h)`);
         }
       } catch (err) {
         failedCount++;
-        console.warn(`[LogWriter] CLEANUP_FAILED | file=${file} | ${(err as Error).message}`);
       }
     }
-
-    if (deletedCount > 0 || failedCount > 0) {
-      console.log(`[LogWriter] CLEANUP_COMPLETE | deleted=${deletedCount} | failed=${failedCount} | retention=${LOG_RETENTION_HOURS}h`);
-    }
   } catch (err) {
-    console.warn(`[LogWriter] CLEANUP_ERROR | ${(err as Error).message}`);
   }
 }
 
@@ -145,8 +133,6 @@ function flushLogBuffers(): void {
     // Use async append - fire and forget for performance
     fs.appendFile(filePath, content, (err) => {
       if (err && !isShuttingDown) {
-        // Only log to console to avoid recursion
-        console.error(`[LogWriter] Failed to write to ${filePath}: ${err.message}`);
       }
     });
   }
@@ -179,16 +165,12 @@ flushIntervalId = setInterval(flushLogBuffers, FLUSH_INTERVAL_MS);
 
 // Start periodic cleanup interval (every 6 hours)
 cleanupIntervalId = setInterval(() => {
-  cleanupOldLogFiles().catch(err =>
-    console.warn(`[LogWriter] Cleanup interval failed: ${err.message}`)
-  );
+  cleanupOldLogFiles().catch(() => undefined);
 }, CLEANUP_INTERVAL_MS);
 
 // Run initial cleanup after 10 seconds (allow startup to complete)
 setTimeout(() => {
-  cleanupOldLogFiles().catch(err =>
-    console.warn(`[LogWriter] Initial cleanup failed: ${err.message}`)
-  );
+  cleanupOldLogFiles().catch(() => undefined);
 }, 10000);
 
 // Ensure logs are flushed on process exit
@@ -388,6 +370,7 @@ export const PREFIX_TO_CATEGORY: Record<string, LogCategory> = {
   // Marketplaces (3)
   'Blur': 'blur',
   'OpenSea': 'opensea',
+  'ItemOffers': 'opensea',
   'MagicEden': 'magiceden',
 
   // API (2)
@@ -764,24 +747,15 @@ export function errorLog(prefix: string, message: string, error?: unknown, metad
 }
 
 /**
- * Log a warning message to both console and file.
- * ALWAYS logs regardless of DEBUG flag (warnings are always important).
- * Routes to category-specific log file based on prefix.
+ * Warning logging is intentionally disabled in normal operation.
+ * Use errorLog for issues that should be visible in console and files.
  *
  * @param prefix - Log prefix category (e.g., 'Balance', 'Cache', 'WebSocket')
  * @param message - Warning message content
  * @param metadata - Optional structured metadata for filtering (taskId, marketplace, slug, etc.)
  */
-export function warnLog(prefix: string, message: string, metadata?: LogMetadata): void {
-  const timestamp = new Date().toISOString();
-  const metaStr = formatMetadata(metadata);
-  const logLine = `[${timestamp}] [WARN][${prefix}] ${message}${metaStr}`;
-
-  // Console output (use console.warn for warnings)
-  console.warn(logLine);
-
-  // File output (append to category-specific file)
-  writeToFile(logLine, prefix);
+export function warnLog(_prefix: string, _message: string, _metadata?: LogMetadata): void {
+  return;
 }
 
 // ============================================

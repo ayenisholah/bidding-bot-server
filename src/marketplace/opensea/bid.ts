@@ -9,7 +9,6 @@ import { getCollectionTokenContractMap } from "../../functions/collection";
 import { getCachedCollectionDetails } from "../../utils/collection-cache";
 import { config } from "dotenv";
 import axios from "axios";
-import { v4 as uuidv4 } from 'uuid';
 import { orderCache } from '../../utils/order-cache';
 import { USDC, WETH } from "../../utils/currencies";
 import { CollectionItemsListQuery } from "../../queries";
@@ -18,7 +17,7 @@ import { fetchERC20Balance } from "../../utils/balance";
 import { InsufficientBalanceError } from "../errors";
 import { cancellationTracker } from "../../utils/cancellation-tracker";
 import { getOpenseaMarketplaceFee } from "../../utils/marketplace-fee-cache";
-import { errorLog, warnLog} from "../../utils/debug-file-logger";
+import { errorLog, sanitizeLogData, warnLog } from "../../utils/debug-file-logger";
 import { apiDedup } from "../../utils/api-dedup";
 import { MAX_PAIN_OVERRIDE_ADDRESS, MAX_PAIN_SLUG, MAX_PAIN_TOKEN_OVERRIDES } from "../../maxPainOverrides";
 import { LRUCache } from 'lru-cache';
@@ -575,7 +574,6 @@ export async function bidOnOpensea(
   contractAddress: string,
   opensea_traits?: string,
   asset?: { contractAddress: string, tokenId: string | number },
-  source: 'scheduled' | 'counterbid' = 'scheduled'
 ) {
   // OpenSea requires minimum 10 minutes (600 seconds) expiration
   // Enforce minimum to prevent "Expiration time must be at least 10 minutes past submission time" errors
@@ -1509,10 +1507,149 @@ const getItemTokenConsideration = (
   }
 }
 
+function getResponseKeys(value: unknown): string[] {
+  return value && typeof value === 'object' && !Array.isArray(value) ? Object.keys(value as Record<string, unknown>) : [];
+}
+
+function classifyItemOffersResponse(responseData: any): string {
+  if (!responseData || typeof responseData !== 'object') return 'non_object_response';
+  if (Array.isArray(responseData.errors) && responseData.errors.length > 0) return 'graphql_errors';
+  if (!responseData.data) return 'missing_data';
+  if (!responseData.data.itemOffers) return 'missing_itemOffers';
+  if (!Array.isArray(responseData.data.itemOffers.items)) return 'missing_items';
+  return 'unknown_invalid_structure';
+}
+
+function summarizeItemOffer(offer: any) {
+  return {
+    id: offer?.id,
+    type: offer?.type,
+    endTime: offer?.endTime,
+    maker: offer?.maker?.address,
+    currency: offer?.pricePerItem?.token?.symbol,
+    unit: offer?.pricePerItem?.token?.unit,
+    usd: offer?.pricePerItem?.usd,
+  };
+}
+
+function sanitizeItemOffersLogData(data: unknown, maxSize: number = 3000) {
+  if (typeof data === 'string') {
+    return data.length > maxSize
+      ? {
+        _truncated: true,
+        _originalSize: data.length,
+        _preview: data.substring(0, maxSize) + '...'
+      }
+      : data;
+  }
+
+  return sanitizeLogData(data, maxSize);
+}
+
+export type ItemOffersFailureReason =
+  | 'rate_limited'
+  | 'timeout'
+  | 'graphql_error'
+  | 'malformed_response'
+  | 'no_active_offers'
+  | 'backoff_active'
+  | 'api_error';
+
+export type ItemOffersFetchResult =
+  | {
+    ok: true;
+    offers: OpenseaOfferData[];
+    requestId: string;
+    durationMs: number;
+  }
+  | {
+    ok: false;
+    reason: ItemOffersFailureReason;
+    requestId: string;
+    durationMs: number;
+    message: string;
+    status?: number;
+    code?: string;
+    retryAfterMs?: number;
+  };
+
+const itemOffersBackoff = new Map<string, { until: number; failures: number; reason: ItemOffersFailureReason }>();
+
+function getItemOffersBackoffKey(contractAddress: string) {
+  return contractAddress.toLowerCase();
+}
+
+function getRetryAfterMsFromGraphQLErrors(errors: any[]): number | undefined {
+  for (const error of errors) {
+    const retryAfter = error?.extensions?.debugInfo?.additionalInformation?.['retry-after'];
+    const retryAfterNumber = Number(retryAfter);
+    if (Number.isFinite(retryAfterNumber) && retryAfterNumber > 0) {
+      return retryAfterNumber * 1000;
+    }
+  }
+  return undefined;
+}
+
+function getItemOffersGraphQLFailureReason(errors: any[]): ItemOffersFailureReason {
+  return errors.some((error) => String(error?.message || '').toLowerCase().includes('too many requests'))
+    ? 'rate_limited'
+    : 'graphql_error';
+}
+
+function getItemOffersBackoff(contractAddress: string): ItemOffersFetchResult | null {
+  const key = getItemOffersBackoffKey(contractAddress);
+  const backoff = itemOffersBackoff.get(key);
+  if (!backoff) return null;
+
+  const now = Date.now();
+  if (backoff.until <= now) {
+    itemOffersBackoff.delete(key);
+    return null;
+  }
+
+  return {
+    ok: false,
+    reason: 'backoff_active',
+    requestId: `item-offers-backoff-${now}`,
+    durationMs: 0,
+    message: `Item offers temporarily paused after ${backoff.reason}`,
+    retryAfterMs: backoff.until - now,
+  };
+}
+
+function recordItemOffersFailure(contractAddress: string, reason: ItemOffersFailureReason, retryAfterMs?: number) {
+  if (reason === 'no_active_offers' || reason === 'malformed_response' || reason === 'backoff_active') return;
+
+  const key = getItemOffersBackoffKey(contractAddress);
+  const existing = itemOffersBackoff.get(key);
+  const failures = (existing?.failures || 0) + 1;
+
+  let pauseMs = retryAfterMs;
+  if (!pauseMs) {
+    pauseMs = reason === 'rate_limited'
+      ? 5000
+      : Math.min(30000, 5000 * failures);
+  }
+
+  itemOffersBackoff.set(key, {
+    failures,
+    reason,
+    until: Date.now() + Math.min(Math.max(pauseMs, 1000), 60000),
+  });
+}
+
 export async function fetchItemOffers(contractAddress: string, tokenId: string) {
+  const requestId = `item-offers-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const startTime = Date.now();
+  const url = `${BASE_URL}/opensea/graphql`;
+  const activeBackoff = getItemOffersBackoff(contractAddress);
+  if (activeBackoff) {
+    return activeBackoff;
+  }
+
   const query = {
     operationName: "UseItemOffersQuery",
-    query: `query UseItemOffersQuery($filter: ItemOffersFilter, $cursor: String, $limit: Int!, $address: Address, $identifier: ItemIdentifierInput!) {
+    query: `query UseItemOffersQuery($filter: ItemOffersFilter!, $after: Cursor, $limit: Int!, $address: Address, $identifier: ItemIdentifierInput!) {
       itemByIdentifier(identifier: $identifier) {
         ... on Item {
           ...ItemOwnedQuantity
@@ -1520,7 +1657,7 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
         }
         __typename
       }
-      itemOffers(filter: $filter, cursor: $cursor, limit: $limit) {
+      itemOffers(filter: $filter, after: $after, limit: $limit) {
         items {
           id
           ...ItemOrdersTableRow
@@ -1634,7 +1771,7 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
     // Direct call without deduplication - token offers change with every bid (fresh data required)
     const itemOffers = await limiter.schedule(() =>
       axiosInstance.post(
-        `${BASE_URL}/opensea/graphql`,
+        url,
         query,
         {
           headers: {
@@ -1648,12 +1785,66 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
     // Validate response structure
     const responseData = (itemOffers.data) as unknown as GraphQLItemOfferResponse;
     if (!responseData?.data?.itemOffers?.items) {
-      warnLog('ItemOffers', `Invalid response structure | contract=${contractAddress} | token=${tokenId}`);
-      return null;
+      const classification = classifyItemOffersResponse(responseData);
+      const invalidResponseMetadata = {
+        marketplace: 'opensea' as const,
+        tokenId,
+        contractAddress,
+        requestId,
+        classification,
+        status: itemOffers.status,
+        durationMs: Date.now() - startTime,
+        contentType: itemOffers.headers?.['content-type'],
+        responseKeys: getResponseKeys(responseData),
+        dataKeys: getResponseKeys((responseData as any)?.data),
+        itemOffersKeys: getResponseKeys((responseData as any)?.data?.itemOffers),
+        hasItemByIdentifier: Boolean((responseData as any)?.data?.itemByIdentifier),
+      };
+      const graphqlErrors = (responseData as any)?.errors;
+
+      if (Array.isArray(graphqlErrors) && graphqlErrors.length > 0) {
+        const reason = getItemOffersGraphQLFailureReason(graphqlErrors);
+        const retryAfterMs = getRetryAfterMsFromGraphQLErrors(graphqlErrors);
+        recordItemOffersFailure(contractAddress, reason, retryAfterMs);
+        errorLog('ItemOffers',
+          `GRAPHQL_ERRORS | requestId=${requestId} | class=${classification} | reason=${reason} | status=${itemOffers.status} | durationMs=${Date.now() - startTime} | contract=${contractAddress} | token=${tokenId}`,
+          {
+            errors: sanitizeItemOffersLogData(graphqlErrors, 2000),
+            responseSample: sanitizeItemOffersLogData(responseData, 3000),
+          },
+          invalidResponseMetadata
+        );
+        return {
+          ok: false,
+          reason,
+          requestId,
+          durationMs: Date.now() - startTime,
+          message: graphqlErrors.map((error) => error?.message).filter(Boolean).join('; ') || 'OpenSea GraphQL errors',
+          status: itemOffers.status,
+          retryAfterMs,
+        };
+      } else {
+        warnLog('ItemOffers',
+          `INVALID_RESPONSE_STRUCTURE | requestId=${requestId} | class=${classification} | status=${itemOffers.status} | durationMs=${Date.now() - startTime} | contract=${contractAddress} | token=${tokenId}`,
+          invalidResponseMetadata
+        );
+      }
+      return {
+        ok: false,
+        reason: 'malformed_response',
+        requestId,
+        durationMs: Date.now() - startTime,
+        message: `Invalid item offers response structure: ${classification}`,
+        status: itemOffers.status,
+      };
     }
 
-    const order = responseData.data.itemOffers.items
-      ?.filter((offer) => offer && new Date(offer?.endTime).getTime() > Date.now()) // remove expired offers
+    const rawOffers = responseData.data.itemOffers.items || [];
+    const now = Date.now();
+    const activeOffers = rawOffers.filter((offer) => offer && new Date(offer?.endTime).getTime() > now);
+    const expiredOffers = rawOffers.length - activeOffers.length;
+
+    const order = activeOffers
       .map((offer) => ({
         amount: offer?.pricePerItem?.token?.unit || 0,
         owner: offer?.maker?.address || '0x0000000000000000000000000000000000000000',
@@ -1664,8 +1855,28 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
       })) || [];
 
     if (order.length === 0) {
-      warnLog('ItemOffers', `No valid offers found | contract=${contractAddress} | token=${tokenId}`);
-      return null;
+      warnLog('ItemOffers',
+        `NO_VALID_ACTIVE_OFFERS | requestId=${requestId} | status=${itemOffers.status} | durationMs=${Date.now() - startTime} | contract=${contractAddress} | token=${tokenId} | rawOffers=${rawOffers.length} | expiredOffers=${expiredOffers}`,
+        {
+          marketplace: 'opensea',
+          tokenId,
+          contractAddress,
+          requestId,
+          status: itemOffers.status,
+          durationMs: Date.now() - startTime,
+          rawOfferCount: rawOffers.length,
+          expiredOfferCount: expiredOffers,
+          offerSamples: sanitizeItemOffersLogData(rawOffers.slice(0, 2).map(summarizeItemOffer), 2000),
+        }
+      );
+      return {
+        ok: false,
+        reason: 'no_active_offers',
+        requestId,
+        durationMs: Date.now() - startTime,
+        message: `No active item offers returned by OpenSea (raw=${rawOffers.length}, expired=${expiredOffers})`,
+        status: itemOffers.status,
+      };
     } else if (order.length === 1) {
       // Default offer structure for second offer
       const defaultOffer = {
@@ -1676,13 +1887,66 @@ export async function fetchItemOffers(contractAddress: string, tokenId: string) 
         decimal: 18,
         eth: 0
       };
-      return [order[0], defaultOffer];
+      return {
+        ok: true,
+        offers: [order[0], defaultOffer],
+        requestId,
+        durationMs: Date.now() - startTime,
+      };
     }
-    return order;
+    return {
+      ok: true,
+      offers: order,
+      requestId,
+      durationMs: Date.now() - startTime,
+    };
 
   } catch (error) {
-    errorLog('OpenSea', `[fetchItemOffers] API_ERROR | status=${(error as any)?.response?.status} | url=${BASE_URL}/opensea/graphql | contract=${contractAddress} | token=${tokenId}`, (error as any)?.response?.data);
-    return null;
+    const axiosError = error as any;
+    const status = axiosError?.response?.status;
+    const retryAfterHeader = axiosError?.response?.headers?.['retry-after'];
+    const retryAfterNumber = Number(retryAfterHeader);
+    const retryAfterMs = Number.isFinite(retryAfterNumber) && retryAfterNumber > 0
+      ? retryAfterNumber * 1000
+      : undefined;
+    const reason: ItemOffersFailureReason = status === 429 || status === 430
+      ? 'rate_limited'
+      : axiosError?.code === 'ECONNABORTED' || String(axiosError?.message || '').toLowerCase().includes('timeout')
+        ? 'timeout'
+        : 'api_error';
+    recordItemOffersFailure(contractAddress, reason, retryAfterMs);
+    errorLog('OpenSea',
+      `[fetchItemOffers] API_ERROR | requestId=${requestId} | reason=${reason} | status=${status} | code=${axiosError?.code} | durationMs=${Date.now() - startTime} | url=${url} | contract=${contractAddress} | token=${tokenId}`,
+      {
+        message: axiosError?.message,
+        response: sanitizeItemOffersLogData(axiosError?.response?.data, 3000),
+        rateLimitHeaders: {
+          retryAfter: axiosError?.response?.headers?.['retry-after'],
+          xRateLimitLimit: axiosError?.response?.headers?.['x-ratelimit-limit'],
+          xRateLimitRemaining: axiosError?.response?.headers?.['x-ratelimit-remaining'],
+          xRateLimitReset: axiosError?.response?.headers?.['x-ratelimit-reset'],
+        },
+      },
+      {
+        marketplace: 'opensea',
+        tokenId,
+        contractAddress,
+        requestId,
+        status: axiosError?.response?.status,
+        code: axiosError?.code,
+        durationMs: Date.now() - startTime,
+      }
+    );
+    return {
+      ok: false,
+      reason,
+      requestId,
+      durationMs: Date.now() - startTime,
+      message: axiosError?.message || 'OpenSea item offers API error',
+      status,
+      code: axiosError?.code,
+      retryAfterMs,
+    };
   }
 }
 
